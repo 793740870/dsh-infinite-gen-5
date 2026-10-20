@@ -36,7 +36,7 @@
 
 ### Windows x64（推荐）
 
-需要已安装的 DeepSeek Harness profile。完整包内置 Ghidra/JDK/Python、x64dbg/Python/bridge 和上游源码、许可及哈希清单；**不需要商业 Reverse 安装**，DSH 本身不随包提供。
+需要已安装的 DeepSeek Harness profile。完整包内置 Ghidra/JDK/Python、x64dbg/Python/bridge 和上游源码、许可及哈希清单；**不需要商业 IDA 安装**，DSH 本身不随包提供。
 
 1. 从 [v1.1.0 Release](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.1.0) 下载 `IG5-1.1.0-Windows-x64-full-20261020.zip` 和同名 `.sha256`，核对 SHA-256。
 2. 完整解压，保留 `plugin/`、`manifest.json` 及所有运行资产；不要只复制安装脚本。
