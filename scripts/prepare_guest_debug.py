@@ -72,7 +72,8 @@ def prepare(spec_path, destination, host_profile):
         inventory.extend(file for file in (ROOT / directory).rglob('*') if file.is_file() and '__pycache__' not in file.parts)
     for directory, pattern in (('adapters/x64dbg', '*.py'), ('adapters/vmci', '*.py'), ('worker', 'trace*.py')):
         inventory.extend((ROOT / directory).glob(pattern))
-    inventory.extend(ROOT / name for name in ('LICENSE', 'THIRD_PARTY_NOTICES.txt', 'adapters/vmci/launcher.cpp'))
+    inventory.extend(ROOT / name for name in ('LICENSE', 'THIRD_PARTY_NOTICES.txt', 'adapters/vmci/launcher.cpp',
+                                             'worker/behavior_rules.py', 'worker/api_trace_summary.py'))
     for file in sorted(inventory):
         if file.resolve() != file.absolute(): raise ValueError('Bundle source cannot be linked')
         files[file.relative_to(ROOT).as_posix()] = stable_read(file, 128*1024*1024)

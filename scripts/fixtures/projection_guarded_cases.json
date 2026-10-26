@@ -539,7 +539,7 @@
       "oracle": "actual-minimum-dispatch",
       "error": null,
       "target": {
-        "path": "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\packed-suite-vmp311\\packed-round-mix64-ultra.exe",
+        "path": "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\packed-suite-vmp311\\packed-round-mix64-ultra.exe",
         "bytes": 1360896,
         "sha256": "5f9c1b6fcb019366f835d8f02d9ec3b2957fe619e039410d07f288a9c73f63f0"
       },
@@ -591,7 +591,7 @@
       "oracle": "actual-context0-dispatch",
       "error": null,
       "target": {
-        "path": "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\packed-suite-vmp311\\packed-round-mix64-ultra.exe",
+        "path": "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\packed-suite-vmp311\\packed-round-mix64-ultra.exe",
         "bytes": 1360896,
         "sha256": "5f9c1b6fcb019366f835d8f02d9ec3b2957fe619e039410d07f288a9c73f63f0"
       },
@@ -647,7 +647,7 @@
       "projection_mode": "strict"
     }
   ],
-  "originalContextSource": "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\tool-research\\projection-bsr-20261015-v1\\runtime-compatibility\\lifter\\records\\662c026c-c78e-4d01-a724-e1520bc5e00d.json",
+  "originalContextSource": "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\tool-research\\projection-bsr-20261015-v1\\runtime-compatibility\\lifter\\records\\662c026c-c78e-4d01-a724-e1520bc5e00d.json",
   "nativeTargetExecuted": false,
   "businessAccepted": false
 }

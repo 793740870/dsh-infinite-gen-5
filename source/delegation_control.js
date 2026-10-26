@@ -2,14 +2,37 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { ProjectStore } from './project_store.js';
 
-const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+const fail = (code, message) => { throw Object.assign(new Error(message), { code,
+  phase: code.includes('BUDGET') ? 'shared-budget' : 'delegation-control', retryable: false,
+  observedAt: new Date().toISOString(), faultStartedAt: null, diagnosticId: randomUUID(),
+  recoveryActions: ['Use ig5_doctor operation=session for local metadata; retain the original shared ledger.'] }); };
 const same = (a, b) => ['projectId', 'artifactId', 'sha256', 'engine', 'provider', 'attachmentId', 'dbRevision'].every(k => a?.[k] === b?.[k]);
 const key = id => createHash('sha256').update(id).digest('hex');
+const lineageFailure = (reason, message) => {
+  throw Object.assign(new Error(message), { code: 'AGENT_LINEAGE_UNAVAILABLE', reason, phase: 'session-lineage',
+    retryable: reason === 'PARENT_SESSION_UNAVAILABLE', observedAt: new Date().toISOString(),
+    diagnosticId: randomUUID(), evidenceStatus: 'observed-metadata-only', faultStartedAt: null,
+    recoveryActions: ['Call ig5_doctor with operation=session for local session metadata.',
+      'Ask the host to restore/index the original session ancestry, then retry. Existing shared usage remains in force.'],
+    automaticRecoverySupported: false });
+};
+
+function validateState(state, rootId) {
+  if (state.schemaVersion !== 1 || state.rootId !== rootId || !state.tickets || typeof state.tickets !== 'object' || Array.isArray(state.tickets)
+    || Object.keys(state.tickets).length > 128 || state.budget && (!Number.isSafeInteger(state.budget.limit) || !Number.isSafeInteger(state.budget.used)
+      || state.budget.limit < 1 || state.budget.used < 0 || state.budget.used > state.budget.limit || !state.budget.byAgent
+      || typeof state.budget.byAgent !== 'object' || Array.isArray(state.budget.byAgent)
+      || Object.values(state.budget.byAgent).some(n => !Number.isSafeInteger(n) || n < 0)
+      || Object.values(state.budget.byAgent).reduce((a, b) => a + b, 0) !== state.budget.used))
+    fail('DELEGATION_STORE_CORRUPT', 'Invalid delegation accounting; refusing controlled dispatch');
+}
 
 /** Persistent accounting is separate from task notes and database revisions. */
 export class DelegationControl {
   constructor({ root, getAgent = () => undefined }) {
-    this.store = new ProjectStore({ root: path.join(root, 'delegation-control') });
+    // Defer ledger opening so a corrupt ledger cannot prevent metadata-only diagnosis.
+    let store;
+    Object.defineProperty(this, 'store', { get: () => store ||= new ProjectStore({ root: path.join(root, 'delegation-control') }) });
     this.getAgent = getAgent;
     this.agents = new Map();
     this.runs = new Map();
@@ -18,15 +41,19 @@ export class DelegationControl {
   remember(agent) { if (agent?.id && agent.session?.header?.id === agent.id) this.agents.set(agent.id, agent); }
   lineage(agent) {
     this.remember(agent);
-    if (!agent?.id || agent.session?.header?.id !== agent.id) fail('AGENT_LINEAGE_UNAVAILABLE', 'Reliable DSH session identity is required for controlled delegation');
+    if (!agent?.id || agent.session?.header?.id !== agent.id) lineageFailure('SESSION_IDENTITY_MISMATCH', 'Reliable DSH session identity is required for controlled delegation');
     const ids = [], seen = new Set();
     for (let at = agent; at; ) {
-      if (seen.has(at.id) || ids.length >= 32) fail('AGENT_LINEAGE_UNAVAILABLE', 'Invalid or excessive DSH parent lineage');
+      if (seen.has(at.id)) lineageFailure('SESSION_LINEAGE_CYCLE', 'Invalid cyclic DSH parent lineage');
+      if (ids.length >= 32) lineageFailure('SESSION_LINEAGE_LIMIT', 'Excessive DSH parent lineage');
       seen.add(at.id); ids.push(at.id); this.remember(at);
       const parent = at.session.header.parentSession;
-      if (!parent) return ids;
+      if (parent === undefined || parent === null) return ids;
+      if (typeof parent !== 'string' || !parent.trim()) lineageFailure('SESSION_IDENTITY_MISMATCH', 'Invalid DSH parent session identity');
+      if (seen.has(parent)) lineageFailure('SESSION_LINEAGE_CYCLE', 'Invalid cyclic DSH parent lineage');
       at = this.getAgent(parent) || this.agents.get(parent);
-      if (!at || at.id !== parent || at.session?.header?.id !== parent) fail('AGENT_LINEAGE_UNAVAILABLE', 'DSH parent session is unavailable; shared budget cannot be bypassed');
+      if (!at) lineageFailure('PARENT_SESSION_UNAVAILABLE', 'DSH parent session is unavailable; shared budget cannot be bypassed');
+      if (at.id !== parent || at.session?.header?.id !== parent) lineageFailure('PARENT_IDENTITY_MISMATCH', 'DSH parent session identity conflicts with the host index');
     }
   }
   transaction(agent, fn) {
@@ -34,11 +61,29 @@ export class DelegationControl {
     return this.store.updateInvestigationRecords(records => {
       const k = key(rootId);
       const record = records[k] ||= { schemaVersion: 1, rootId, budget: null, tickets: {} };
-      if (record.schemaVersion !== 1 || record.rootId !== rootId || !record.tickets || typeof record.tickets !== 'object'
-        || Object.keys(record.tickets).length > 128 || record.budget && (!Number.isSafeInteger(record.budget.limit) || !Number.isSafeInteger(record.budget.used)
-          || record.budget.limit < 1 || record.budget.used < 0 || record.budget.used > record.budget.limit)) fail('DELEGATION_STORE_CORRUPT', 'Invalid delegation accounting; refusing controlled dispatch');
+      validateState(record, rootId);
       return fn(record, ids);
     });
+  }
+  /** Exact local control-plane operation: no RPC, content, ledger writes or inferred parent ownership. */
+  diagnose(agent, args = {}) {
+    if (Object.keys(args).some(k => k !== 'operation') || args.operation !== 'session') fail('INVALID_ARGUMENT', 'Use operation=session alone for local session diagnosis');
+    const result = { schemaVersion: 1, kind: 'session-diagnostic', diagnosticId: randomUUID(), observedAt: new Date().toISOString(),
+      faultStartedAt: null, phase: 'session-lineage', evidenceStatus: 'observed-metadata-only',
+      rpcPerformed: false, budgetModified: false, automaticRecoverySupported: false, budget: null };
+    try {
+      const ids = this.lineage(agent), rootId = ids.at(-1);
+      const state = this.store.readInvestigationRecords()[key(rootId)];
+      if (state) validateState(state, rootId);
+      return { ...result, status: 'available', code: 'SESSION_LINEAGE_AVAILABLE', retryable: false,
+        lineageDepth: ids.length, budget: state?.budget ? { active: true, used: state.budget.used, limit: state.budget.limit } : { active: false },
+        recoveryActions: [] };
+    } catch (error) {
+      const code = error.code === 'AGENT_LINEAGE_UNAVAILABLE' ? error.reason
+        : ['STORE_CORRUPT', 'STORE_SCHEMA_MISMATCH', 'DELEGATION_STORE_CORRUPT'].includes(error.code) ? 'DELEGATION_STORE_CORRUPT' : 'SESSION_METADATA_UNAVAILABLE';
+      return { ...result, status: 'unavailable', code, retryable: code === 'PARENT_SESSION_UNAVAILABLE',
+        recoveryActions: error.recoveryActions || ['Inspect the original host session and retained ledger; do not recreate or reset shared accounting.'] };
+    }
   }
   budget(agent, input) {
     if (!input || Object.keys(input).some(k => !['action', 'max_calls'].includes(k)) || !['start', 'status'].includes(input.action)) fail('INVALID_ARGUMENT', 'collaboration action must be start or status');
@@ -53,6 +98,14 @@ export class DelegationControl {
         scope: 'all IG5 tool dispatches across this DSH root and descendants', persistent: true,
         statusExempt: true, note: 'Activation/status are control-plane queries. Failed dispatched calls count; exhausted calls do not run. Non-IG5 tools, tokens and external providers are not counted.' };
     });
+  }
+  /** Read-only planning hint. Dispatch remains the sole authority that charges the shared budget. */
+  planningBudget(agent) {
+    if (!agent?.session?.header) return { status: 'unavailable', active: false, remaining: null };
+    const ids = this.lineage(agent), rootId = ids.at(-1), state = this.store.readInvestigationRecords()[key(rootId)];
+    if (!state) return { status: 'read', active: false, remaining: null };
+    validateState(state, rootId);
+    return { status: 'read', active: !!state.budget, remaining: state.budget ? state.budget.limit - state.budget.used : null };
   }
   charge(agent, name, args) {
     // Legacy fixture/service callers have no session metadata. They cannot opt

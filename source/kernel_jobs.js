@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WorkerClient } from './worker_transport.js';
+import { WorkerClient, workerEnvironment } from './worker_transport.js';
 import { terminateTree } from '../engine_runtime.js';
 
 const root = fs.realpathSync(path.dirname(fileURLToPath(import.meta.url)) + '/..');
@@ -26,7 +27,8 @@ export class KernelJobs {
       : [path.join(root, 'worker', 'ig5_kernel.py'), '--runtime-root', runtimeRoot, '--ghidra-home', pack.ghidraHome, '--java-home', pack.javaHome];
     const child = this.spawnProcess(pack.pythonExe, ['-I', '-B', ...workerArgs],
     { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, cwd: root,
-      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } });
+      env: { ...workerEnvironment(process.env, this.cfg.workerEnvPassthrough), IG5_HOME: this.cfg.home || process.env.IG5_HOME || path.join(os.homedir(), '.dsh', 'ig5'),
+        PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } });
     const item = { child, stopIssued: false, exited: false };
     item.stopped = new Promise(resolve => {
       const done = () => { item.exited = true; this.active.delete(item); resolve(); };
@@ -46,7 +48,8 @@ export class KernelJobs {
       if (!pending) return;
       session.pending.delete(message.id);
       clearTimeout(pending.timer); pending.removeAbort?.();
-      message.error ? pending.reject(Object.assign(new Error(message.error.message || 'IG5 kernel failed'), { code: message.error.code })) : pending.resolve(message.result);
+      message.error ? pending.reject(Object.assign(new Error(message.error.message || 'IG5 kernel failed'),
+        Object.fromEntries(['code','runtimePolicyBlock','policyStateError','nativeLaunchAttempted'].filter(k=>message.error[k]!==undefined).map(k=>[k,message.error[k]])))) : pending.resolve(message.result);
     } });
     this.active.add(item);
     const abort = () => { client.dispose(new Error('IG5 kernel request cancelled')); item.stop(); };

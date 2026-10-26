@@ -30,7 +30,16 @@ export class HistoryIndex {
     while (left < right) { const middle = (left + right) >>> 1; if (order(rows[middle], entry) < 0) left = middle + 1; else right = middle; }
     rows.splice(left, 0, entry);
     this.cache.stamp = stamp(fs.lstatSync(this.store.directory(this.part), { bigint: true }));
+    // 把戳更新到最新值会掩盖"别的存储实例在我们之前提交、而我们没见过"的记录（评审 R6）。
+    // 因此增量结果只是未经校验的：下一次命中缓存之前必须核对目录里的记录个数。
+    this.cache.unverified = true;
     if (rows.length > 100000) this.invalidate();
+  }
+  /** 只读目录项、不读文件内容：数出目录里符合命名规则的记录文件个数。 */
+  async countRecords(directory) {
+    const handle = await fs.promises.opendir(directory); let count = 0;
+    for await (const entry of handle) if (entry.name.endsWith('.json') && ID.test(entry.name.slice(0, -5))) count++;
+    return count;
   }
   async refresh() {
     if (this.inflight) return this.inflight;
@@ -42,7 +51,15 @@ export class HistoryIndex {
   }
   async build() {
     const directory = this.store.directory(this.part), currentStamp = stamp(await fs.promises.lstat(directory, { bigint: true }));
-    if (this.cache?.complete && this.cache.stamp === currentStamp) return { cacheHit: true, indexBytesRead: 0 };
+    if (this.cache?.complete && this.cache.stamp === currentStamp) {
+      if (!this.cache.unverified) return { cacheHit: true, indexBytesRead: 0 };
+      // 增量插入后的缓存：个数一致才可信；不一致说明有别的实例提交过我们没见过的记录，丢弃缓存并重新扫描。
+      if (await this.countRecords(directory) === this.cache.rows.length && this.cache?.stamp === currentStamp) {
+        this.cache.unverified = false;
+        return { cacheHit: true, indexBytesRead: 0 };
+      }
+      this.cache = null;
+    }
     if (this.scan && (this.scan.invalidated || this.scan.stamp !== currentStamp)) { await this.scan.directory.close(); this.scan = null; }
     if (!this.scan) this.scan = { directory: await fs.promises.opendir(directory), rows: [], stamp: currentStamp, invalidated: false };
     const scan = this.scan; let count = 0, bytes = 0, complete = false;

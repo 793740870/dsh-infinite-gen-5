@@ -6,7 +6,7 @@
 
 `ig5_profile.autonomy` 仅检查本次执行 agent 的 Goal 工具、原生服务、精确目标和续行资格。`continuationEligible=true` 只说明当前 phase/activation/round count 满足必要条件，不证明驱动器已运行；`driverVerifiedByThisQuery=false` 和 `queryStartsWork=false` 明确保留这一范围。缺服务或过期 agent 显式返回不可确认，不能按 id 从别人的会话借用目标。
 
-`ig5_profile workspace` 管理静态目标的调查笔记与系统 dossier，保留修订和来源；它本身不调度模型。Skill 引用的完整目标、失败位置与 next_step 使压缩和恢复后可以继续，但假设/结论仍是调用者陈述。用户取消不自动复活；会话重启后原生 Goal 可以 active/disarmed，须按 DSH 的明确恢复入口恢复，而不是插件暗中重启任务。
+`ig5_workspace` 管理静态目标的调查笔记与系统 dossier，保留修订和来源；它本身不调度模型。Skill 引用的完整目标、失败位置与 next_step 使压缩和恢复后可以继续，但假设/结论仍是调用者陈述。用户取消不自动复活；会话重启后原生 Goal 可以 active/disarmed，须按 DSH 的明确恢复入口恢复，而不是插件暗中重启任务。
 
 真实闭环验收需在配置好的 DSH 模型中：读取新注册 Skill；原生 `create_goal` 写入当前会话；首轮产生实际工具报告并保留 active；无需额外人类“继续”，自动 Round 被接纳并产生后续工具调用；当前 Goal、报告、模型、部署与会话事件摘要一致；最终按实际验收范围完成或保留未解决。单次 RPC、schema/SDK、模拟测试和源码中存在驱动器都不能替代这项观察。
 

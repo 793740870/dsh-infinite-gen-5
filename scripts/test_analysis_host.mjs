@@ -1,3 +1,4 @@
+import { installReadOnlyDataRoute } from '../source/read_only_data_route.js';
 // Real Node data workers with isolated artifacts; no engine/sample execution.
 import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -75,12 +76,12 @@ function assertNoRawParameters(value) {
   }
 }
 
-await test('Full40 → Core8 → Full40 and 12 original approval tools', async () => {
-  assert.equal(fixtureHost.tools.size, 40);
+await test('Full43 → Core8 → Full43 and 12 original approval tools', async () => {
+  assert.equal(fixtureHost.tools.size, 43);
   const core = await fixtureHost.call('ig5_profile', { toolset: 'core' });
   assert.equal(core.activeTools.length, 8); assert.equal(fixtureHost.tools.size, 8);
   assert(!fixtureHost.tools.has('ig5_crypto') && !fixtureHost.tools.has('ig5_protocol'));
-  await fixtureHost.call('ig5_profile', { toolset: 'full' }); assert.equal(fixtureHost.tools.size, 40);
+  await fixtureHost.call('ig5_profile', { toolset: 'full' }); assert.equal(fixtureHost.tools.size, 43);
   const writeNames = ['rename', 'patch_bytes', 'comment', 'analyze', 'set_type', 'undo', 'run_idapython', 'dbg', 'struct', 'switch_repair', 'emulate', 'sync'].map(name => 'ig5_' + name);
   const pre = fixtureHost.hooks.get('tools/pre-execute');
   for (const name of writeNames) {
@@ -260,7 +261,7 @@ await test('Source provenance rejects conflicting target/engine and result ancho
 await test('Read-only report routes do not dispatch workers/RPC; target/engine scope rejects foreign result', async () => {
   const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   const start = source.indexOf('function installDataRoute('), end = source.indexOf('function formatProgress(', start);
-  const install = vm.runInNewContext(source.slice(start, end) + '\ninstallDataRoute;', { URL, path, fs, publicEngineError: error => error.message || String(error), diagAppend() {} });
+  const install = vm.runInNewContext(source.slice(start, end) + '\ninstallDataRoute;', { installReadOnlyDataRoute, publicEngineError: error => error.message || String(error), diagAppend() {} });
   let handler, engineSpawns = 0, analysisRuns = 0, rpc = 0;
   const manager = { sessions: new Map(), alive: () => false,
     sessionKey: (target, engine) => path.resolve(target).toLowerCase() + '::' + engine,

@@ -1,6 +1,6 @@
 # VM 上下文候选与阶段边界
 
-`ig5_profile recovery.context` 将一到十六份已提交的 `ig5-recorded-handlers-v1` 报告连同其 recurrence 与 body-selection 上游重新做逐字节 SHA-256 绑定，然后从完整观察中归纳候选关系。调用者只提供 `handler_refs`，不能提交 VIP/VSP、阶段或 opcode 语义答案。
+`ig5_recovery recovery.context` 将一到十六份已提交的 `ig5-recorded-handlers-v1` 报告连同其 recurrence 与 body-selection 上游重新做逐字节 SHA-256 绑定，然后从完整观察中归纳候选关系。调用者只提供 `handler_refs`，不能提交 VIP/VSP、阶段或 opcode 语义答案。
 
 当前输出 `ig5-vm-context-model-v1` 包含：
 

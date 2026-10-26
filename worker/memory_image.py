@@ -91,6 +91,35 @@ class MemoryImage:
         self.unknown_permission_pages = len(unknown_pages)
         self.page_permission_merges = sum(count > 1 for count in contributions.values())
 
+    def with_entry(self, entry):
+        """The same memory with another start address (regions are shared, not copied)."""
+        return MemoryImage(self.arch, self.bits, entry, self.regions, source=self.source)
+
+    def snapshot(self):
+        """Read every region from the engine once and serve later reads from memory.
+
+        Batch emulation creates many short-lived emulators; without this each one would re-read the whole
+        image from the engine. The result is a self-contained copy: later engine edits are not seen.
+        """
+        regions = []
+        for region in self.regions:
+            data = bytearray()
+            unavailable = False
+            for offset in range(0, region.size, 65536):
+                chunk = region.read(offset, min(65536, region.size - offset))
+                if chunk is None:
+                    unavailable = True
+                    break
+                data += chunk
+            if unavailable:
+                reader = lambda offset, size: None
+            else:
+                frozen = bytes(data)
+                reader = lambda offset, size, buffer=frozen: buffer[offset:offset + size]
+            regions.append(MemoryRegion(region.base, region.size, reader, name=region.name, zero_fill=region.zero_fill,
+                                        permissions=region.permissions))
+        return MemoryImage(self.arch, self.bits, self.entry, regions, source=self.source)
+
     def chunks(self, chunk_size=65536):
         if not isinstance(chunk_size, int) or not 1 <= chunk_size <= 65536:
             raise ValueError('invalid snapshot chunk size')

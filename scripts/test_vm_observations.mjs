@@ -137,6 +137,22 @@ test('profile imports committed bytes, saves a hash-bound full page and truthful
   assert.equal(view.wholeFunctionCoverageProved, false); assert.equal(view.liveExecutionInspected, false); assert.equal(view.architectureProved, false);
   assert.equal(f.reports(), 1);
 });
+
+test('opt-in phase profile binds versions, keeps old output unchanged, and rejects forged worker stages before save', async t => {
+  const f = await host(t);
+  assert.equal((await f.invoke()).observations.phaseModel, undefined);
+  const view = (await f.invoke({ ...f.request, phase_model: true })).observations;
+  assert.equal(view.phaseModel.groups.length, 2); assert.equal(view.phaseModel.responsePreviewComplete, false);
+  const result = f.analysis.artifacts.get(view.reportId).result;
+  assert.equal(result.phaseModel.groups.length, 3); assert.equal(result.phaseModel.phaseVerified, false);
+  assert.equal(result.phaseModel.groups[0].versions[0].version.binding.reportId, f.record.id);
+  await assert.rejects(f.invoke({ ...f.request, phase_model: 'true' }), /boolean/);
+  const original = f.analysis.observeNative;
+  const count = f.reports();
+  f.analysis.observeNative = async (...args) => { const output = await original(...args); output.phaseModel.groups[0].versions[0].version.binding.reportSha256 = 'f'.repeat(64); return output; };
+  await assert.rejects(f.invoke({ ...f.request, phase_model: true }), { code: 'CODE_VERSION_MISMATCH' });
+  assert.equal(f.reports(), count);
+});
 test('profile does not access debugger, approval, task mutation or target execution services', async t => {
   const f = await host(t);
   for (const key of ['get', 'spawnWorker', 'performDebug', 'run', 'close', 'remoteStore']) f.mgr[key] = () => { throw Error('Unexpected native service ' + key); };

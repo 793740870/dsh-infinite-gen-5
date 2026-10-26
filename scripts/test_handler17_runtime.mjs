@@ -8,7 +8,7 @@ const read=p=>JSON.parse(fs.readFileSync(p,'utf8')),discoveryRaw=fs.readFileSync
 assert.equal(hash(discoveryRaw),option('--discovery-sha'));const discovery=JSON.parse(discoveryRaw);
 assert.equal(discovery.targetSha256,'5f9c1b6fcb019366f835d8f02d9ec3b2957fe619e039410d07f288a9c73f63f0');
 assert.equal(hash(fs.readFileSync(discovery.target)),discovery.targetSha256);assert.equal(discovery.rows.length,10);
-const prior='C:/Users/Administrator/.dsh/ig5/artifacts/modern-protection-20261014/tool-research/opaque-chain-20261016-v1-source/verified.json';
+const prior='C:/Users/IG5User/.dsh/ig5/artifacts/modern-protection-20261014/tool-research/opaque-chain-20261016-v1-source/verified.json';
 assert.equal(hash(fs.readFileSync(prior)),'529a1990936b79689c531d9f7a1754c4e305ec3a5a9f4dc8fc38e98b94121601');
 const old=read(prior).cases.find(c=>c.id==='entry-plus16'),paths=old.args.composition_plan.paths;
 const incoming=[...paths,paths[1]],handler=discovery.rows.map(r=>r.ea),dispatch=paths[1].slice(-12);

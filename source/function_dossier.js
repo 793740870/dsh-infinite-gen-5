@@ -10,7 +10,7 @@ const SECTIONS = [
   ['callers', 'calls', 'callers'], ['callees', 'calls', 'callees'], ['stack', 'stack'],
 ];
 const FIELDS = {
-  decompile: ['ea', 'name', 'size', 'lines', 'code'],
+  decompile: ['ea', 'name', 'size', 'lines', 'code', 'addresses'],
   cfg: ['ea', 'name', 'func', 'start_ea', 'total_blocks', 'total_edges', 'blocks', 'edges'],
   callers: ['ea', 'name', 'direction', 'total', 'refsMeaning', 'calls'],
   callees: ['ea', 'name', 'direction', 'total', 'refsMeaning', 'calls'],
@@ -139,7 +139,8 @@ function providerOmissions(section, value) {
     if (Array.isArray(value[field]) && Number.isSafeInteger(value[totalField]) && value[totalField] > value[field].length)
       records.push({ field, returned: value[field].length, available: value[totalField], omitted: value[totalField] - value[field].length });
   }
-  return { truncated: value.truncated === true || value.partial === true || records.length > 0, records };
+  const truncated = value.truncated === true || value.partial === true || records.length > 0;
+  return { truncated, records, completeness: truncated ? 'partial' : value.complete === true ? 'complete' : 'unknown' };
 }
 
 function cacheStore(session, key, value) {
@@ -167,17 +168,33 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
     fail('INVALID_DOSSIER_ARGUMENT', 'name must be a non-empty function name of at most 512 characters');
   if (!requestedEA && !requestedName) fail('INVALID_DOSSIER_ARGUMENT', 'Dossier requires an explicit ea or exact function name');
   const provenance = assertCurrent(mgr, session);
-  const key = PREFIX + JSON.stringify(stable({ provenance, requestedEA, requestedName, maximum, rowLimit, capabilities: session.capabilities || null }));
+  if (args.refresh !== undefined && typeof args.refresh !== 'boolean') fail('INVALID_DOSSIER_ARGUMENT', 'refresh must be Boolean');
+  const context = { provenance, requestedEA, requestedName, maximum, rowLimit, capabilities: session.capabilities || null,
+    analysis: { profile: session.info?.analysisProfile || null, complete: session.info?.analysisComplete ?? null, partial: session.info?.partial ?? null, skippedAnalyzers: session.info?.skippedAnalyzers || [] },
+    resultIdempotencyKey: args.result_idempotency_key || null };
+  const key = PREFIX + JSON.stringify(stable(context));
   const saved = session.cache?.get(key);
-  if (saved?.marker === CACHE_MARKER) {
+  const expired = saved?.value.savedResult && Date.parse(saved.value.savedResult.expiresAt) <= Date.now();
+  if (saved?.marker === CACHE_MARKER && !args.refresh && !expired) {
     assertCurrent(mgr, session, provenance);
-    const result = clone(saved.value); result.cache.hit = true; return result;
+    const result = clone(saved.value); result.cache.hit = true; result.cache.reason = 'matching_snapshot_and_view'; return result;
   }
+  const previous = session.dossierLastAttempt;
+  let missReason = args.refresh ? 'explicit_refresh' : expired ? 'saved_result_expired' : !previous ? 'cold_or_evicted'
+    : previous.error ? 'prior_section_error'
+    : JSON.stringify(previous.context.provenance) !== JSON.stringify(provenance) ? 'provenance_changed'
+    : JSON.stringify(previous.context.analysis) !== JSON.stringify(context.analysis) ? 'analysis_state_changed'
+    : JSON.stringify(previous.context.capabilities) !== JSON.stringify(context.capabilities) ? 'capabilities_changed'
+    : previous.context.maximum !== maximum || previous.context.rowLimit !== rowLimit ? 'view_budget_changed'
+    : previous.context.requestedEA !== requestedEA || previous.context.requestedName !== requestedName ? 'request_identity_changed' : 'cold_or_evicted';
 
   const rawSections = {}, analysis = {
     partial: typeof session.info?.partial === 'boolean' ? session.info.partial : null,
     analysisComplete: typeof session.info?.analysisComplete === 'boolean' ? session.info.analysisComplete : null,
     analysisProfile: session.info?.analysisProfile || null,
+    skippedAnalyzers: session.info?.skippedAnalyzers || [], prototypeStatus: 'unknown',
+    warnings: (session.info?.skippedAnalyzers || []).includes('Decompiler Parameter ID')
+      ? ['Batch Decompiler Parameter ID was skipped; an empty prototype does not prove that a function has no parameters. Full profile is explicit and may change analysis cost and database revision.'] : [],
   };
   let functionEA = null, reliableEA = null, functionName = requestedName, size = null;
   for (const [section, method, direction] of SECTIONS) {
@@ -188,6 +205,10 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
     const params = functionEA || requestedEA ? { ea: functionEA || requestedEA } : { name: requestedName };
     if (section !== 'decompile') params.limit = rowLimit;
     if (direction) params.direction = direction;
+    // The Ghidra provider already generates all relationships before slicing.
+    // Capture those existing records under a separate fixed byte ceiling;
+    // rowLimit continues to control the displayed dossier, not stored data.
+    if (mgr.functionResults && provenance.provider === 'ghidra' && method === 'calls') params.result_capture_bytes = 131072;
     try {
       const value = jsonToolOutput(await mgr.rpc(session, method, params, Math.min(60000, mgr.cfg?.requestTimeoutMs || 60000)));
       assertCurrent(mgr, session, provenance); assertResultIdentity(value, provenance);
@@ -224,6 +245,14 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
   if (!functionEA && !requestedEA) fail('DOSSIER_FUNCTION_UNRESOLVED', 'Exact name could not be resolved to a function address; provide an explicit ea or inspect the function list');
   const resolved = functionEA !== null;
   functionEA ||= requestedEA;
+  let savedResult = null, savedResultError = null;
+  if (mgr.functionResults) {
+    try { savedResult = mgr.functionResults.save({ provenance,
+      query: { requestedEA, requestedName, rowLimit, capabilities: session.capabilities || null, analysis }, sections: rawSections,
+      taskId: args.result_task_id || args.task_id || null, idempotencyKey: args.result_idempotency_key || null }); }
+    catch (error) { savedResultError = { code: error.code || 'RESULT_SAVE_FAILED', stored: 'unavailable' }; }
+    assertCurrent(mgr, session, provenance);
+  }
   const result = {
     kind: 'function-dossier', schemaVersion: 1,
     function: { ea: functionEA, name: functionName || null, size, resolved,
@@ -231,9 +260,10 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
     functionAddress: createAddressRef({ ...provenance, space: 'static', kind: 'va', value: functionEA }),
     // Include the public wrapper's evidence inside this byte budget, so it does
     // not append another unbudgeted identity after collection has completed.
-    provenance, _ig5: clone(provenance), analysis, sections: {}, cache: { hit: false }, responseTruncated: false,
+    provenance, _ig5: clone(provenance), analysis, sections: {}, cache: { hit: false, reason: missReason, scope: 'response', engineCache: 'unknown', keyDigest: createHash('sha256').update(key).digest('hex') }, responseTruncated: false,
     responseBudgetBytes: maximum, responseMaxRows: rowLimit,
     snapshotDigest: '0'.repeat(64),
+    ...(mgr.functionResults ? { savedResult, ...(savedResultError ? { savedResultError } : {}) } : {}),
     limitations: ['Provider observations are not semantic or vulnerability proof.', 'Response limits do not bound all provider computation.'],
   };
   const minimumOverhead = bytes(result) + 5 * 256;
@@ -243,6 +273,8 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
     const [name, method, direction] = SECTIONS[index], raw = rawSections[name];
     const room = Math.max(16, Math.floor(remaining / (SECTIONS.length - index)));
     const section = { status: raw.status, method, ...(direction ? { direction } : {}) };
+    if (mgr.functionResults) section.completeness = { provider: raw.status === 'ok' ? raw.provider?.completeness || 'unknown' : raw.status,
+      stored: savedResult ? 'complete' : 'unavailable', response: 'complete' };
     if (raw.reason) section.reason = prefix(raw.reason, Math.min(256, room));
     if (raw.error) section.error = prefix(raw.error, Math.min(256, room));
     if (raw.reason && section.reason !== raw.reason || raw.error && section.error !== raw.error) {
@@ -252,6 +284,7 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
       const view = compact(raw.data, room, rowLimit);
       section.data = view.data;
       if (view.truncated || raw.provider?.truncated) {
+        if (section.completeness && view.truncated) section.completeness.response = 'partial';
         if (section.status === 'ok') section.status = 'truncated';
         section.truncation = { response: view.truncated, omitted: view.omitted, providerTruncated: raw.provider?.truncated === true, provider: raw.provider?.records || [] };
         result.responseTruncated = true;
@@ -271,6 +304,7 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
     if (largest.status === 'ok') largest.status = 'truncated';
     largest.truncation ||= { response: true, omitted: { rows: 0, fields: 0, stringBytes: 0, depth: 0 }, providerTruncated: false, provider: [] };
     largest.truncation.response = true;
+    if (largest.completeness) largest.completeness.response = 'partial';
     for (const field of Object.keys(view.omitted)) largest.truncation.omitted[field] += view.omitted[field];
     result.responseTruncated = true;
   }
@@ -278,6 +312,7 @@ export async function collectFunctionDossier(mgr, session, args = {}) {
   result.snapshotDigest = createHash('sha256').update(JSON.stringify(stable(content)), 'utf8').digest('hex');
   const output = jsonToolOutput(result);
   assertCurrent(mgr, session, provenance);
+  session.dossierLastAttempt = { context, error: Object.values(result.sections).some(section => section.status === 'error') };
   if (!Object.values(result.sections).some(section => section.status === 'error')) cacheStore(session, key, output);
   return output;
 }

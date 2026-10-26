@@ -536,6 +536,25 @@ def m_listing(params: dict) -> dict:
             mod_name = ida_nalt.get_import_module_name(mi) or f"#{mi}"
             ida_nalt.enum_import_names(mi, cb)
     elif kind == "exports":
+        # 真正的导出目录（与 Ghidra 分支同一个有界读取器）；绝不拿分析入口冒充导出表。
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+            import ida_bytes
+            _shared = str(_Path(__file__).resolve().parent.parent / "adapters" / "ghidra")
+            if _shared not in _sys.path:
+                _sys.path.append(_shared)
+            from pe_exports import pe_exports
+            _base = int(ida_nalt.get_imagebase())
+            _result = pe_exports(lambda rva, size: ida_bytes.get_bytes(_base + rva, size) or b"", _base)
+            _all = _result.pop("rows")
+            return dict(_result, kind=kind, total=len(_all), offset=offset, items=_all[offset:offset + limit],
+                        source="pe-export-directory")
+        except Exception as e:
+            return {"kind": kind, "total": 0, "offset": offset, "items": [], "partial": True, "unsupported": True,
+                    "source": "pe-export-directory", "note": f"export directory unavailable: {type(e).__name__}: {e}",
+                    "hint": "use kind=entries for analysis entry points (not exports)"}
+    elif kind == "entries":
         total = int(ida_entry.get_entry_qty())
         for i in range(offset, min(total, offset + limit)):
             ordinal = int(ida_entry.get_entry_ordinal(i))
@@ -546,7 +565,8 @@ def m_listing(params: dict) -> dict:
             })
     else:
         raise ValueError(f"unknown kind: {kind!r}")
-    return {"kind": kind, "total": total, "offset": offset, "items": rows}
+    extra = {"source": "ida_entry", "semantics": "analysis-entrypoints-not-export-table"} if kind == "entries" else {}
+    return {"kind": kind, "total": total, "offset": offset, "items": rows, **extra}
 
 
 def m_undo(params: dict) -> dict:
@@ -581,8 +601,11 @@ def m_undo(params: dict) -> dict:
         ok = bool(ida_name.set_name(ea, entry["old"]))
         return {"ok": ok, "action": "undo", "kind": kind, "ea": hex(ea), "name": entry["old"]}
     if kind == "comment":
-        ok = bool(ida_bytes.set_cmt(ea, entry["old"] or "", False))
-        return {"ok": ok, "action": "undo", "kind": kind, "ea": hex(ea)}
+        rptble = bool(entry.get("repeatable", False))  # 旧日志没有该字段：按普通注释处理
+        wanted = entry["old"] or ""
+        ok = bool(ida_bytes.set_cmt(ea, wanted, rptble))
+        restored = (ida_bytes.get_cmt(ea, rptble) or "") == wanted
+        return {"ok": ok and restored, "action": "undo", "kind": kind, "ea": hex(ea), "repeatable": rptble, "restored": restored}
     if kind == "set_type":
         old = entry.get("old_tif")
         if old is None:
@@ -839,9 +862,14 @@ def m_dbg(params: dict) -> dict:
             raise ValueError('unsupported register name')
         value = int(str(params['value']), 0)
         old = int(ida_dbg.get_reg_val(name))
+        if params.get('expected') not in (None, ''):
+            expected = int(str(params['expected']), 0)
+            if old != expected:
+                return {'ok': False, 'op': op, 'reg': name, 'written': False, 'error': 'expected register value does not match; nothing was written',
+                        'expected': hex(expected), 'actual': hex(old), **state()}
         ok = bool(ida_dbg.set_reg_val(name, value))
-        return {'ok': ok, 'op': op, 'reg': name, 'before': hex(old),
-                'after': hex(int(ida_dbg.get_reg_val(name))), **state()}
+        after = int(ida_dbg.get_reg_val(name))
+        return {'ok': ok and after == value, 'op': op, 'reg': name, 'before': hex(old), 'after': hex(after), **state()}
     if op in ("step", "stepover"):
         if ida_dbg.get_process_state() != ida_dbg.DSTATE_SUSP:
             return {"ok": False, "op": op, "error": "stepping requires a suspended process", **state()}
@@ -873,6 +901,19 @@ def m_dbg(params: dict) -> dict:
         data = _hex_to_bytes(str(params.get("hex") or ""))
         if not data or len(data) > 4096:
             raise ValueError('debug memory writes require 1..4096 bytes')
+        if params.get('expected') not in (None, ''):
+            wanted_before = _hex_to_bytes(str(params['expected']))
+            if len(wanted_before) != len(data):
+                raise ValueError('expected must have the same byte length as the bytes to write')
+            try:
+                current = ida_idd.dbg_read_memory(ea, len(data))
+            except Exception as e:
+                return {"ok": False, "op": op, "written": 0, "error": f"cannot read current memory to verify expected: {e}", **state()}
+            if current is None or len(bytes(current)) != len(data):
+                return {"ok": False, "op": op, "written": 0, "error": "cannot read the complete current memory to verify expected", **state()}
+            if bytes(current) != wanted_before:
+                return {"ok": False, "op": op, "ea": hex(ea), "written": 0, "error": "expected memory value does not match; nothing was written",
+                        "expected": wanted_before.hex(), "actual": bytes(current).hex(), **state()}
         try:
             ok = bool(ida_idd.dbg_write_memory(ea, data))
         except Exception as e:
@@ -898,10 +939,10 @@ def m_comment(params: dict) -> dict:
     ea = _resolve_ea(params)
     text = str(params.get("text") or "")
     rptble = bool(params.get("repeatable", False))
-    old = ida_bytes.get_cmt(ea, False) or ""
+    old = ida_bytes.get_cmt(ea, rptble) or ""  # 记录被修改的那个注释通道的原值
     ok = bool(ida_bytes.set_cmt(ea, text, rptble))
     if ok:
-        _op_journal.append({"kind": "comment", "ea": int(ea), "old": old})
+        _op_journal.append({"kind": "comment", "ea": int(ea), "old": old, "repeatable": rptble})
     return {"ok": ok, "ea": hex(ea), "text": text[:200]}
 
 
@@ -1030,14 +1071,19 @@ def m_analyze(params: dict) -> dict:
             raise ValueError("ea is required")
         stop = end if end is not None else ea + (size or 4096)
         kind = getattr(ida_auto, "AU_CODE", 1) if action == "mark_code" else getattr(ida_auto, "AU_USED", 2)
+        failures = []
         try:
             ida_auto.auto_mark_range(ea, stop, kind)
-        except Exception:
-            pass
+        except Exception as e:
+            failures.append(f"auto_mark_range: {type(e).__name__}: {e}")
         try:
-            ida_auto.auto_wait()
-        except Exception:
-            pass
+            if ida_auto.auto_wait() is False:
+                failures.append("auto_wait: analysis did not complete (cancelled)")
+        except Exception as e:
+            failures.append(f"auto_wait: {type(e).__name__}: {e}")
+        if failures:
+            # 没有抛异常不等于完成；任何一步失败都不能报告成功。只有一步失败时标记为部分完成。
+            return {"ok": False, "action": action, "ea": hex(ea), "end": hex(stop), "partial": len(failures) < 2, "error": "; ".join(failures)}
         return {"ok": True, "action": action, "ea": hex(ea), "end": hex(stop)}
     raise ValueError(f"unknown action: {action!r}")
 

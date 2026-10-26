@@ -33,7 +33,7 @@ test('profile saves an immutable full input snapshot and returns an exact report
   assert.equal(result.sourceCase.sha256, ref.sha256);
   const full = f.artifacts.get(result.reportId);
   assert.equal(full.kind, 'vm-recovery-plan'); assert.deepEqual(full.result.caseSnapshot, f.value);
-  assert.equal(result.integration.dshPlanningEntry, 'ig5_profile.recovery');
+  assert.equal(result.integration.dshPlanningEntry, 'ig5_recovery.recovery');
   assert.equal(result.integration.automaticExecution, 'not-connected');
   assert.equal(result.completionAssessment.businessAccepted, false);
   assert.equal(result.executionAuthority, 'not-inspected');
@@ -90,7 +90,7 @@ test('preview puts unverified completion and byte-only provenance before variabl
   assert.ok(result.nextActions.every(action => action.readiness === 'requires-independent-preflight'));
 });
 test('profile schema has nested required arrays and denies unknown fields', () => {
-  assert.deepEqual(recoveryProfileSchema.oneOf, [{ required: ['case_ref'] }, { required: ['observations'] }, { required: ['roles'] }, { required: ['flow'] },{required:['recurrences']},{required:['handlers']},{required:['context']}]);
+  assert.deepEqual(recoveryProfileSchema.oneOf, ['case_ref','observations','roles','flow','recurrences','handlers','context','declare_contract','role_compare','role_validate','program','function_check','instances','instance_check'].map(k => ({ required: [k] })));
   assert.deepEqual(recoveryProfileSchema.properties.roles.required, ['recordings','target_sha256']);
   assert.equal(recoveryProfileSchema.properties.roles.properties.offset, undefined);
   assert.deepEqual(recoveryProfileSchema.properties.case_ref.required, ['path', 'sha256']);

@@ -44,7 +44,7 @@ function validateSource(source) {
 function nearbyAccesses(body) {
   const first = body.groups[0].before.gprs, last = body.groups.at(-1).after.gprs;
   const accesses = body.groups.flatMap(group => [...(Array.isArray(group.memoryReads) ? group.memoryReads : []),
-    ...(Array.isArray(group.memoryWrites) ? group.memoryWrites : [])]);
+    ...(Array.isArray(group.memoryWrites) ? group.memoryWrites : Array.isArray(group.memoryWrites?.stores) ? group.memoryWrites.stores : [])]);
   return GPRS.map(name => {
     if (!hex(first[name]) || !hex(last[name])) fail('unobserved body register');
     const near = accesses.filter(access => hex(access.address) && [first[name], last[name]].some(base => {

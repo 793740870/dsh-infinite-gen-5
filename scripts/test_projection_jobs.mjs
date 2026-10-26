@@ -26,7 +26,7 @@ const ack = (child, message, result = { accepted: true }) => child.frame({ id: 1
 
 function fixture(onRequest) {
   const children = [];
-  const jobs = new LiftJobs({ artifactDir: path.join(directory, randomUUID()),
+  const jobs = new LiftJobs({ home: path.join(directory,'policy-home'), artifactDir: path.join(directory, randomUUID()),
     host: { id: 'win32-x64' }, requestTimeoutMs: 2000,
     ghidra: { available: true, pythonExe: 'simulated-worker-never-started.exe' } }, {
     stopTimeoutMs: 50,
@@ -35,7 +35,8 @@ function fixture(onRequest) {
       assert.equal(options.windowsHide, true);
       assert.equal(options.shell, undefined);
       assert(args.includes('-I') && args.includes('-B'));
-      assert(Object.keys(options.env).every(name => /^(SYSTEMROOT|WINDIR|TEMP|TMP)$/i.test(name)));
+      assert(Object.keys(options.env).every(name => /^(SYSTEMROOT|WINDIR|TEMP|TMP|IG5_HOME)$/i.test(name)));
+      assert.equal(options.env.IG5_HOME,path.join(directory,'policy-home'));
       const child = new EventEmitter();
       Object.assign(child, { pid: 90000 + children.length, args, sent: [], kills: 0,
         stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: new EventEmitter() });

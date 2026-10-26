@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeHex } from './address_ref.js';
@@ -97,7 +98,8 @@ export class ProjectStore {
       if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
       const owner = JSON.parse(fs.readFileSync(path.join(this.lockFile, 'owner.json'), 'utf8'));
       if (owner.schema !== 1 || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 ||
-        !/^[0-9a-f-]{36}$/.test(owner.nonce) || !(owner.creationIdentity === null || typeof owner.creationIdentity === 'string')) return null;
+        !/^[0-9a-f-]{36}$/.test(owner.nonce) || !(owner.creationIdentity === null || typeof owner.creationIdentity === 'string') ||
+        typeof owner.hostName !== 'string' || !owner.hostName || typeof owner.platform !== 'string' || !owner.platform) return null; // 缺少主机/平台身份的旧锁保持原样，不放行
       return owner;
     } catch { return null; }
   }
@@ -106,6 +108,8 @@ export class ProjectStore {
     if (!fs.existsSync(this.lockFile)) return true;
     const owner = this._lockOwner();
     if (!owner) fail('STORE_BUSY', 'Unrecognized project lock; leave it intact. After verifying no IG5 process owns it, move projects.lock aside for manual recovery');
+    // 异主机/异平台的所有者无法用本机的 PID 探测判断；一律视为存活（共享或迁移的元数据目录）。
+    if (owner.hostName !== os.hostname() || owner.platform !== process.platform) return false;
     let stale = false;
     try {
       process.kill(owner.pid, 0);
@@ -125,7 +129,7 @@ export class ProjectStore {
   }
 
   _acquireLock() {
-    const owner = { schema: 1, pid: process.pid, creationIdentity: ownProcessIdentity, nonce: randomUUID() };
+    const owner = { schema: 1, pid: process.pid, creationIdentity: ownProcessIdentity, nonce: randomUUID(), hostName: os.hostname(), platform: process.platform };
     const claim = path.join(this.root, `.projects-lock-${owner.nonce}.claim`);
     fs.mkdirSync(claim);
     try {
@@ -159,21 +163,35 @@ export class ProjectStore {
 
   _write(update) {
     const lock = this._acquireLock();
-    let temporary;
+    let temporary, metadataPublished = false, metadataStage = 'read', primaryFailure = null;
     try {
       const data = this._read();
+      metadataStage = 'update';
       const result = update(data);
       data.revision = next(data.revision, 'store revision');
       temporary = path.join(this.root, `.projects-${randomUUID()}.tmp`);
+      metadataStage = 'stage';
       const fd = fs.openSync(temporary, 'wx');
       try { fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n', 'utf8'); fs.fsyncSync(fd); }
       finally { fs.closeSync(fd); }
+      metadataStage = 'publish';
       fs.renameSync(temporary, this.file);
+      metadataPublished = true;
       temporary = null;
       return clone(result);
+    } catch (error) {
+      primaryFailure = error;
+      Object.assign(error, { metadataPublished, metadataStage });
+      throw error;
     } finally {
-      if (temporary && fs.existsSync(temporary)) fs.unlinkSync(temporary);
-      this._releaseLock(lock);
+      try {
+        if (temporary && fs.existsSync(temporary)) fs.unlinkSync(temporary);
+        metadataStage = 'lock-release';
+        this._releaseLock(lock);
+      } catch (error) {
+        if (primaryFailure) Object.assign(primaryFailure, { metadataCleanupConfirmed: false, metadataCleanupError: { code: error.code || 'METADATA_CLEANUP_FAILED', stage: metadataStage } });
+        else { Object.assign(error, { metadataPublished, metadataStage, metadataCleanupConfirmed: false }); throw error; }
+      }
     }
   }
 

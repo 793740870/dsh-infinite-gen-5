@@ -11,6 +11,11 @@ from itertools import islice
 import math
 import re
 
+import feature_rules
+import rule_match
+from behavior_inventory import behavior_inventory
+from behavior_rules import API_CATEGORIES, API_GROUPS, api_category, canonical, is_api_name_string  # noqa: F401  (re-exported for providers)
+
 
 AES_SBOX = bytes.fromhex(
     "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0"
@@ -66,7 +71,8 @@ LIMITS = {'max_bytes': (8 * 1024 * 1024, 64 * 1024 * 1024),
           'max_segment_bytes': (1024 * 1024, 16 * 1024 * 1024),
           'max_matches': (256, 4096), 'max_segments': (256, 4096),
           'max_imports': (20000, 100000), 'max_strings': (20000, 100000),
-          'max_api_matches': (128, 4096), 'max_string_chars': (4096, 16384)}
+          'max_api_matches': (128, 4096), 'max_string_chars': (4096, 16384),
+          'max_rule_matches': (256, 4096)}
 
 
 def scan_limits(params=None):
@@ -100,44 +106,12 @@ def sampled_ranges(size, budget):
     return merged
 
 
-API_GROUPS = {
-    'crypto': ('cryptencrypt', 'cryptdecrypt', 'cryptacquirecontext', 'cryptgenkey',
-               'cryptderivekey', 'cryptimportkey', 'crypthashdata', 'cryptprotectdata',
-               'cryptunprotectdata', 'bcryptencrypt', 'bcryptdecrypt', 'bcryptgeneratesymmetrickey',
-               'bcryptderivekey', 'bcryptimportkey', 'bcryptcreatehash', 'bcrypthashdata',
-               'bcryptgenrandom', 'ncryptdecrypt', 'ncryptencrypt', 'evp_encryptinit_ex',
-               'evp_encryptupdate', 'evp_decryptinit_ex', 'evp_decryptupdate', 'aes_encrypt',
-               'aes_decrypt', 'rc4', 'pk11_decrypt', 'pk11_encrypt'),
-    'network': ('send', 'sendto', 'recv', 'recvfrom', 'wsasend', 'wsasendto', 'wsarecv',
-                'wsarecvfrom', 'socket', 'connect', 'accept', 'bind', 'listen', 'getaddrinfo',
-                'ssl_read', 'ssl_write', 'ssl_read_ex', 'ssl_write_ex', 'gnutls_record_recv',
-                'gnutls_record_send', 'winhttpreaddata', 'winhttpwritedata', 'winhttpsendrequest',
-                'winhttpconnect', 'internetreadfile', 'internetwritefile', 'internetopenurl',
-                'httpsendrequest', 'urldownloadtofile'),
-    'memory-execution': ('virtualalloc', 'virtualprotect', 'writeprocessmemory',
-                         'createremotethread', 'ntallocatevirtualmemory', 'ntwritevirtualmemory',
-                         'ntprotectvirtualmemory', 'mmap', 'mprotect'),
-    'execution': ('winexec', 'shellexecute', 'createprocess', 'system', 'execve', 'popen'),
-    'registry': ('regsetvalue', 'regsetvalueex'),
-    'dynamic-loading': ('loadlibrary', 'loadlibraryex', 'getprocaddress', 'dlopen', 'dlsym'),
-    'debug-detection': ('isdebuggerpresent', 'checkremotedebuggerpresent', 'ptrace'),
-    'hooks': ('setwindowshookex',),
-}
-API_CATEGORIES = {name: category for category, names in API_GROUPS.items() for name in names}
 STRING_GROUPS = {'crypto': ('aes', 'md5', 'sha1', 'sha-1', 'sha256', 'sha-256', 'sha512', 'sha-512', 'rsa', 'base64', 'rc4', 'decrypt', 'encrypt'),
                  'network': ('http', 'tcp', 'socket', 'dns', 'hostname', 'websocket', 'content-length'),
                  'exec': ('cmd.exe', 'powershell', 'schtasks', 'regsvr32', '/bin/sh'),
-                 'registry': ('software\\', 'hkey_', 'currentversion')}
-
-
-def api_category(name):
-    cleaned = str(name).lower().split('@@')[0].split('@')[0]
-    cleaned = re.sub(r'^(?:__imp_|imp_|_)+', '', cleaned)
-    if cleaned in API_CATEGORIES:
-        return API_CATEGORIES[cleaned]
-    if cleaned.endswith(('a', 'w')):
-        return API_CATEGORIES.get(cleaned[:-1])
-    return None
+                 'registry': ('software\\', 'hkey_', 'currentversion'),
+                 'persistence': ('currentversion\\run', 'schtasks', '/etc/cron', 'crontab', 'systemd', 'rc.local', '.bashrc', 'launchagents', 'startup\\'),
+                 'anti-analysis': ('vmware', 'virtualbox', 'vboxservice', 'qemu', 'sbiedll', 'wireshark', 'procmon', 'x64dbg', 'ollydbg', 'sandbox')}
 
 
 def _address(value):
@@ -146,13 +120,29 @@ def _address(value):
     return int(value, 0) if isinstance(value, str) else int(value)
 
 
+def rule_source(params):
+    """Return (source, origin, version) for the built-in or caller-supplied rule table."""
+    params = params or {}
+    if params.get('rules') is None:
+        return feature_rules.RULES_SOURCE, 'builtin', feature_rules.RULES_VERSION
+    source = params['rules']
+    if not isinstance(source, str):
+        raise ValueError('rules must be a string containing rule source text')
+    if len(source.encode('utf-8')) > rule_match.MAX_SOURCE_BYTES:
+        raise ValueError('rules is longer than %d bytes' % rule_match.MAX_SOURCE_BYTES)
+    return source, 'custom', rule_match.SUBSET_VERSION
+
+
 def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
     """Return a shared schema plus legacy aliases, with explicit bounded coverage."""
     limits = scan_limits(params)
+    source, origin, version = rule_source(params)
+    ruleset = rule_match.compile_rules(source, origin=origin, version=version,
+                                       max_locations=limits['max_rule_matches'])
     markers, entropy_rows = {}, []
     bytes_attempted = bytes_read = import_count = string_count = 0
     module_counts = Counter()
-    api_rows = []
+    api_rows, behavior_rows, imported_keys = [], [], set()
     flags = {'segments': False, 'bytes': False, 'matches': False,
              'imports': False, 'api_matches': False, 'strings': False, 'string_chars': False, 'string_reads': False}
     for index, segment in enumerate(islice(segments, limits['max_segments'] + 1)):
@@ -169,7 +159,7 @@ def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
         ranges = sampled_ranges(size, max(0, available)) if segment.get('readable', True) and address_space == 'memory' else []
         counts, failures, coverage, failed_ranges = Counter(), 0, [], []
         for offset, length in ranges:
-            tail, cursor = b'', offset
+            tail, rule_tail, cursor = b'', b'', offset
             end = offset + length
             while cursor < end:
                 requested = min(CHUNK_SIZE, end - cursor)
@@ -216,9 +206,12 @@ def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
                                 if marker['kind'] == 'initial-state':
                                     markers[key]['evidence']['candidateAlgorithms'] = ['MD5', 'SHA-1', 'RIPEMD-160']
                             position = buffer.find(marker['pattern'], position + 1)
+                    rule_buffer = rule_tail + data
+                    ruleset.feed(rule_buffer, start + cursor - len(rule_tail), name, len(rule_tail))
                     tail = buffer[-OVERLAP:] if len(data) == requested else b''
+                    rule_tail = rule_buffer[-ruleset.overlap:] if ruleset.overlap and len(data) == requested else b''
                 else:
-                    tail = b''
+                    tail, rule_tail = b'', b''
                 cursor += requested
         sampled = sum(counts.values())
         entropy = -sum((count / sampled) * math.log2(count / sampled) for count in counts.values()) if sampled else None
@@ -245,6 +238,7 @@ def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
         module_counts[module] += 1
         category = api_category(api)
         if category:
+            imported_keys.add(canonical(api))
             if len(api_rows) >= limits['max_api_matches']:
                 flags['api_matches'] = True
                 continue
@@ -254,7 +248,10 @@ def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
                 if key in row:
                     hit[key] = row[key]
             api_rows.append(hit)
+            # Per-function attribution feeds the behavior inventory only; the visible rows stay compact.
+            behavior_rows.append({**hit, 'referenceFunctions': row.get('referenceFunctions')})
     families = {key: 0 for key in STRING_GROUPS}
+    dynamic_api_rows = []
     string_failures = string_truncations = 0
     for row in islice(strings, limits['max_strings'] + 1):
         if string_count == limits['max_strings']:
@@ -268,6 +265,13 @@ def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
         flags['string_reads'] |= unreadable
         string_truncations += int(shortened)
         string_failures += int(unreadable)
+        if isinstance(row, dict) and row.get('apiNameCandidate') and is_api_name_string(text) and len(dynamic_api_rows) < limits['max_api_matches']:
+            # A name string that no instruction references, for an API that is imported normally, is the import
+            # table's own name entry (every PE/ELF has them), not a lead for run-time resolution.
+            used_by_code = any(isinstance(ref, dict) and ref.get('function') for ref in row.get('referenceFunctions') or ())
+            if used_by_code or canonical(text) not in imported_keys:
+                dynamic_api_rows.append({'api': text, 'stringEa': row.get('ea'), 'referenceFunctions': row.get('referenceFunctions'),
+                                         'confidence': 'medium' if any(c.isupper() for c in text) else 'low'})
         text = text[:limits['max_string_chars']].lower()
         for family, words_in_family in STRING_GROUPS.items():
             if any(word in text for word in words_in_family):
@@ -276,9 +280,13 @@ def scan_image(segments, imports=(), strings=(), *, source_engine, params=None):
     marker_rows = sorted(markers.values(), key=lambda row: (_address(row['ea']), row['name']))
     summary = {'modules': len(module_counts), 'functions': import_count,
                'byModule': dict(module_counts.most_common(12)), 'truncated': flags['imports']}
+    rule_report = ruleset.result(bytes_read)
+    flags['rule_matches'] = rule_report['coverage']['truncated']
     return {'schemaVersion': 2, 'sourceEngine': source_engine, 'idb_modified': False,
             'crypto_markers': marker_rows, 'entropies': entropy_rows, 'suspicious_apis': api_rows,
             'stringFamilies': families, 'importSummary': summary,
+            'behaviors': behavior_inventory(behavior_rows, dynamic_api_rows),
+            'ruleMatches': rule_report,
             'coverage': {'bytesAttempted': bytes_attempted, 'bytesRead': bytes_read,
                          'segments': len(entropy_rows), 'imports': import_count, 'strings': string_count,
                          'stringReadFailures': string_failures, 'stringsShortened': string_truncations,

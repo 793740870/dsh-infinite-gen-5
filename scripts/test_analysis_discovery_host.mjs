@@ -38,8 +38,8 @@ const source = (offset, size) => ({ source: { target, engine: 'ghidra', ea: '0x'
 let recovered, restored, inferred, keyRef, staticRecovered;
 const noSecrets = value => { const text = JSON.stringify(value); for (const bytes of [key, iv, tag, aad, material]) { assert(!text.includes(bytes.toString('hex')), 'Raw key/AES/material leaked in a report'); assert(!text.includes(bytes.toString('base64')), 'Raw key/AES/material leaked in a report'); } };
 
-await test('Existing two tools add recover/infer/ref/delimiter schemas with correct required arrays', async () => {
-  assert.equal(definitions.length, 2); assert(tools.get('ig5_crypto').parameters.properties.action.enum.includes('recover'));
+await test('Existing tools add recover/infer/ref/delimiter schemas with correct required arrays', async () => {
+  assert.equal(definitions.length, 3); assert(tools.get('ig5_crypto').parameters.properties.action.enum.includes('recover'));
   assert(tools.get('ig5_protocol').parameters.properties.action.enum.includes('infer'));
   assert.equal(tools.get('ig5_crypto').parameters.properties.recovery.properties.key_source.properties.source.required[0], 'target');
   assert(tools.get('ig5_protocol').parameters.properties.framing.properties.type.enum.includes('delimiter'));

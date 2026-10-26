@@ -1,6 +1,6 @@
 # Recorded address and VM role hypotheses
 
-Separate read-only mode: `ig5_profile {"recovery":{"roles":{"recordings":[{"id":"EXACT_UUID","sha256":"EXACT_REPORT_SHA"}],"target_sha256":"EXACT_TARGET_SHA"}}}`. It uses the configured debug-traces store and all immutable report/blob, run/thread and cross-window continuity checks. Do not mix with other recovery/profile modes. max_instructions retains 50000 default / 100000 explicit. offset and limit are rejected.
+Separate read-only mode: `ig5_recovery {"recovery":{"roles":{"recordings":[{"id":"EXACT_UUID","sha256":"EXACT_REPORT_SHA"}],"target_sha256":"EXACT_TARGET_SHA"}}}`. It uses the configured debug-traces store and all immutable report/blob, run/thread and cross-window continuity checks. Do not mix with other recovery/profile modes. max_instructions retains 50000 default / 100000 explicit. offset and limit are rejected.
 
 The data worker validates every window twice, tracks at most 4096 memory/control sites (runtime PC plus bytes), prioritizes one/two-byte-read sites then frequency, selects at most 128 sites and retains each site's first four and last four occurrences. Tracking overflow and omitted sites are explicit. No known handler addresses or VMPBypass offsets select the sites. Samples do not establish complete recording/path coverage.
 

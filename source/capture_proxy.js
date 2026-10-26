@@ -53,7 +53,7 @@ class WebSocketFrames {
   constructor({ limit, client, onFrame, onInvalid }) {
     Object.assign(this, { limit, client, onFrame, onInvalid });
     this.header = Buffer.alloc(14); this.headerBytes = 0; this.headerNeeded = 2;
-    this.frame = null; this.disabled = false; this.fragmentCompressed = false;
+    this.frame = null; this.disabled = false; this.fragmentCompressed = false; this.fragmentOpcode = null;
   }
   push(chunk) {
     if (this.disabled) return;
@@ -73,9 +73,14 @@ class WebSocketFrames {
         if (length > BigInt(Number.MAX_SAFE_INTEGER) || masked !== this.client || ![0, 1, 2, 8, 9, 10].includes(opcode) || (opcode >= 8 && (!fin || length > 125n))) {
           this.disabled = true; this.onInvalid(); return;
         }
+        if (opcode === 0 && (this.fragmentOpcode === null || compressed)
+          || (opcode === 1 || opcode === 2) && this.fragmentOpcode !== null
+          || opcode >= 8 && compressed) {
+          this.disabled = true; this.onInvalid(); return;
+        }
         const continuationCompressed = opcode === 0 && this.fragmentCompressed;
-        if ((opcode === 1 || opcode === 2) && !fin) this.fragmentCompressed = compressed;
-        if (opcode === 0 && fin) this.fragmentCompressed = false;
+        if ((opcode === 1 || opcode === 2) && !fin) { this.fragmentOpcode = opcode; this.fragmentCompressed = compressed; }
+        if (opcode === 0 && fin) { this.fragmentOpcode = null; this.fragmentCompressed = false; }
         this.frame = { opcode, fin, compressed: compressed || continuationCompressed, masked, payloadBytes: Number(length), consumed: 0,
           rsv2: Boolean(this.header[0] & 32), rsv3: Boolean(this.header[0] & 16),
           mask: masked ? Buffer.from(this.header.subarray(this.headerNeeded - 4, this.headerNeeded)) : null, preview: snapshot(this.limit) };
@@ -100,7 +105,7 @@ class WebSocketFrames {
       }
     }
   }
-  get partial() { return Boolean(this.frame || this.headerBytes || this.disabled); }
+  get partial() { return Boolean(this.frame || this.headerBytes || this.disabled || this.fragmentOpcode !== null); }
 }
 
 /** Independent local forward proxy. Captures bytes without modifying system proxy settings. */

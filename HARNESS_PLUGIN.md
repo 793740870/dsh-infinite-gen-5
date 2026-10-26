@@ -1,6 +1,8 @@
-# DeepSeek Harness Plugin — 无限五代 / dsh-infinite-gen-5（v1.0.0）
+# DeepSeek Harness Plugin — 无限五代 / dsh-infinite-gen-5（v1.3.0）
 
-统一 Reverse / Ghidra 静态分析、x64dbg 无头调试与离线数据分析工作台。完整目录为 38 个工具（24 只读、12 审批、2 生命周期/配置），默认注册 Core 8。插件不注入系统提示词；指导载体为工具描述、会话流卡片和七个原生技能。
+统一 Reverse / Ghidra 静态分析、x64dbg 无头调试、HTTP/HTTPS采集与离线数据分析工作台。完整目录为43个工具（28非审批静态入口、13审批、2生命周期/配置），默认注册Core8、八个原生技能。调查恢复按现有会话范围提供静态、无目标执行上下文；workspace 会更新任务存储，recovery 会写报告；工具说明、会话流卡片与技能保留各自职责。1.2.0新增结果持久保存/分页、会话诊断、静态ELF地址、缓存诊断和持久批处理，见 [发布说明](docs/RELEASE_1.2.0.md)。
+
+当前本地 1.3.0 的审查、契约和安装边界见 [版本说明](docs/RELEASE_1.3.0.md)。上文“静态”不表示所有操作只读。
 
 ## 接入架构
 
@@ -22,11 +24,11 @@
 
 | 类别 | 工具 |
 |---|---|
-| 只读（24） | `ig5_doctor`、`ig5_open`、`ig5_status`、`ig5_funcs`、`ig5_strings`、`ig5_decompile`、`ig5_xrefs`、`ig5_calls`、`ig5_bytes`、`ig5_search`、`ig5_listing`、`ig5_scan`、`ig5_export_diff`、`ig5_cfg`、`ig5_slice`、`ig5_fingerprint`、`ig5_stack`、`ig5_switches`、`ig5_vtables`、`ig5_microcode`、`ig5_bindiff`、`ig5_ir`、`ig5_crypto`、`ig5_protocol` |
-| 审批（12） | `ig5_rename`、`ig5_patch_bytes`、`ig5_comment`、`ig5_analyze`、`ig5_set_type`、`ig5_undo`、`ig5_run_idapython`、`ig5_dbg`、`ig5_struct`、`ig5_switch_repair`、`ig5_emulate`、`ig5_sync` |
+| 非审批静态入口（28） | `ig5_doctor`、`ig5_open`、`ig5_status`、`ig5_funcs`、`ig5_strings`、`ig5_decompile`、`ig5_xrefs`、`ig5_calls`、`ig5_bytes`、`ig5_search`、`ig5_listing`、`ig5_scan`、`ig5_export_diff`、`ig5_cfg`、`ig5_slice`、`ig5_fingerprint`、`ig5_stack`、`ig5_switches`、`ig5_vtables`、`ig5_microcode`、`ig5_bindiff`、`ig5_ir`、`ig5_crypto`、`ig5_protocol`、`ig5_package`、`ig5_workspace`、`ig5_recovery`、`ig5_capture` |
+| 审批（13） | `ig5_rename`、`ig5_patch_bytes`、`ig5_comment`、`ig5_analyze`、`ig5_set_type`、`ig5_undo`、`ig5_run_idapython`、`ig5_dbg`、`ig5_struct`、`ig5_switch_repair`、`ig5_emulate`、`ig5_sync`、`ig5_capture_control` |
 | 生命周期/配置（2） | `ig5_close`、`ig5_profile` |
 
-Core 8 为 `doctor/open/status/funcs/strings/decompile/close/profile`（均带 `ig5_` 前缀）。模型按需调用 `ig5_profile toolset=full`，用 `toolset=core` 恢复；不传参数只查询。用户入口 `/ig5 toolset full|core` 保持。支持 scoped API 时全局保留 Core8，其余 30 工具注册到调用者真实 `agent.ctx`，只展开当前 agent，返回 `toolsetScope=agent`；缺少可用 agent context 时拒绝变更，不按 agent 字符串 id 猜测作用域。旧宿主才回退并报告 `toolsetScope=plugin-instance`。两种模式均非持久，重载与新 agent 按 `config.toolset` 初始化；工具可见性不授予执行或写权限。
+Core 8 为 `doctor/open/status/funcs/strings/decompile/close/profile`（均带 `ig5_` 前缀）。模型按需调用 `ig5_profile toolset=full`，用 `toolset=core` 恢复；不传参数只查询。用户入口 `/ig5 toolset full|core` 保持。支持 scoped API 时全局保留 Core8，其余 35 工具注册到调用者真实 `agent.ctx`，只展开当前 agent，返回 `toolsetScope=agent`；缺少可用 agent context 时拒绝变更，不按 agent 字符串 id 猜测作用域。旧宿主才回退并报告 `toolsetScope=plugin-instance`。两种模式均非持久，重载与新 agent 按 `config.toolset` 初始化；工具可见性不授予执行或写权限。
 
 审批按工具名称拦截，要求真实活跃 agent 和宿主公共 `approval.request` 服务。请求携带 agent、toolName、callId、signal 及双语理由，仅明确返回 `allowed-once` 才调用下一项策略；后续拒绝仍生效。`rejected`、`unavailable`、未知结果、缺服务/agent 或请求异常均终止为 deny，`cancelled` 与已中止的 signal 保持 cancel，不依赖宿主将 `ask` 转为 allow 的路径。实际执行后记录 `approvals.jsonl`。因此 `ig5_struct action=get|list`、`ig5_sync action=preview` 仍走工具级审批。工作台 HTTP 不构成写入通道。
 
@@ -135,7 +137,7 @@ Ghidra runtime 包含自身 Ghidra/JDK/Python，x64dbg runtime 包含 x86/x64 de
 
 ## 开发与验证 SOP
 
-所有修改在 `C:\Users\Administrator\Desktop\无限五代\dsh-infinite-gen-5` 源码目录完成，禁止修改运行副本。依次执行全部项目 JS 语法检查、全部 Python 编译检查、`node scripts/test_new_tools.mjs`、Robocopy 镜像同步、重启宿主及本次启动日志核查。完整命令和 npm 回归范围见 [README](README.md#开发验证与同步-sop)。日志是 `~\.dsh\ig5\artifacts\ig5-diag.log`；核对三个端点、审批门和客户端挂载。
+所有修改在 `C:\Users\IG5User\Desktop\无限五代\dsh-infinite-gen-5` 源码目录完成，禁止修改运行副本。依次执行全部项目 JS 语法检查、全部 Python 编译检查、`node scripts/test_new_tools.mjs`、Robocopy 镜像同步、重启宿主及本次启动日志核查。完整命令和 npm 回归范围见 [README](README.md#开发验证与同步-sop)。日志是 `~\.dsh\ig5\artifacts\ig5-diag.log`；核对三个端点、审批门和客户端挂载。
 
 ## 已验证范围
 

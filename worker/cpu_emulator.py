@@ -5,6 +5,9 @@ import time
 from memory_image import MemoryImage, MEMORY_BUDGET, PAGE_SIZE, PERM_READ, PERM_WRITE, integer, page_range
 
 
+WRITE_TRACE_BYTES, WRITE_TRACE_RANGES, WRITE_TRACE_RANGE_BYTES = 1 << 20, 64, 4096
+
+
 def emulate_image(image, params):
     if not isinstance(image, MemoryImage):
         raise ValueError('a validated MemoryImage is required')
@@ -28,6 +31,9 @@ def emulate_image(image, params):
         raise ValueError('unsupported initial register')
     if any(not 0 <= value < (1 << bits) for value in args + list(initial.values())):
         raise ValueError('argument or register does not fit target width')
+    trace_writes = params.get('trace_writes', False)
+    if not isinstance(trace_writes, bool):
+        raise ValueError('trace_writes must be a boolean')
     max_instructions = max(1, min(integer(params.get('max_instructions') or 100000), 1000000))
     timeout_ms = max(1, min(integer(params.get('timeout_ms') or 1000), 10000))
     memory, captures = params.get('memory') or [], params.get('capture') or []
@@ -76,7 +82,7 @@ def emulate_image(image, params):
     vendor = os.path.join(os.path.dirname(__file__), 'vendor')
     if vendor not in sys.path:
         sys.path.insert(0, vendor)
-    from unicorn import Uc, UcError, UC_ARCH_X86, UC_ARCH_ARM64, UC_MODE_32, UC_MODE_64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_QUERY_TIMEOUT, UC_HOOK_INSN, UC_HOOK_INTR, UC_MEM_READ_PROT, UC_MEM_WRITE_PROT, UC_MEM_FETCH_PROT, UC_MEM_READ_UNMAPPED, UC_MEM_WRITE_UNMAPPED, UC_MEM_FETCH_UNMAPPED
+    from unicorn import Uc, UcError, UC_ARCH_X86, UC_ARCH_ARM64, UC_MODE_32, UC_MODE_64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_INVALID, UC_HOOK_MEM_WRITE, UC_QUERY_TIMEOUT, UC_HOOK_INSN, UC_HOOK_INTR, UC_MEM_READ_PROT, UC_MEM_WRITE_PROT, UC_MEM_FETCH_PROT, UC_MEM_READ_UNMAPPED, UC_MEM_WRITE_UNMAPPED, UC_MEM_FETCH_UNMAPPED
     if arch == 'arm64':
         import unicorn.arm64_const as regs
         mu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
@@ -142,6 +148,20 @@ def emulate_image(image, params):
         return False
     mu.hook_add(UC_HOOK_CODE, trace)
     mu.hook_add(UC_HOOK_MEM_INVALID, invalid)
+    # Optional write trace: the first-seen original byte of every written address outside the synthetic stack.
+    # The hook runs before the write, so the bytes read here are the previous contents.
+    originals, write_overflow = {}, [False]
+    def on_write(uc, access, address, size, value, _):
+        if sentinel <= address < stack_base + stack_size:
+            return
+        if len(originals) + size > WRITE_TRACE_BYTES:
+            write_overflow[0] = True
+            return
+        previous = bytes(uc.mem_read(address, size))
+        for offset in range(size):
+            originals.setdefault(address + offset, previous[offset])
+    if trace_writes:
+        mu.hook_add(UC_HOOK_MEM_WRITE, on_write)
     def stop_system(uc, instruction):
         state['system'] = {'instruction': instruction, 'ea': hex(uc.reg_read(ip_reg))}
         uc.emu_stop()
@@ -168,6 +188,25 @@ def emulate_image(image, params):
             result_memory.append({'ea': hex(address), 'size': size, 'hex': bytes(mu.mem_read(address, size)).hex()})
         except UcError as exc:
             result_memory.append({'ea': hex(address), 'error': str(exc)})
+    traced = {}
+    if trace_writes:
+        ranges, start, last = [], None, None
+        for address in sorted(originals):
+            if start is not None and address == last + 1:
+                last = address
+                continue
+            if start is not None:
+                ranges.append((start, last + 1))
+            start = last = address
+        if start is not None:
+            ranges.append((start, last + 1))
+        writes = []
+        for first, end in ranges[:WRITE_TRACE_RANGES]:
+            end = min(end, first + WRITE_TRACE_RANGE_BYTES)
+            writes.append({'ea': hex(first), 'size': end - first, 'before': bytes(originals[a] for a in range(first, end)).hex(),
+                           'after': bytes(mu.mem_read(first, end - first)).hex()})
+        traced = {'writes': writes, 'writesTruncated': write_overflow[0] or len(ranges) > WRITE_TRACE_RANGES
+                  or any(end - first > WRITE_TRACE_RANGE_BYTES for first, end in ranges[:WRITE_TRACE_RANGES])}
     limitations = ['CPU and copied memory only; no OS APIs, TLS setup, or imported function emulation',
                    'Permissions use 4096-byte pages; byte-disjoint regions sharing a page use their permission union']
     if image.unknown_permission_regions:
@@ -177,7 +216,7 @@ def emulate_image(image, params):
             'return_value': hex(mu.reg_read(result_reg)), 'ip': hex(ip), 'instructions': state['instructions'],
             'elapsedMs': int((time.monotonic() - started) * 1000),
             'registers': {name: hex(mu.reg_read(register(name))) for name in allowed_regs},
-            'memory': result_memory, 'fault': state['fault'], 'systemInstruction': state['system'], 'error': error, 'zeroFilledBytes': zero_filled,
+            'memory': result_memory, **traced, 'fault': state['fault'], 'systemInstruction': state['system'], 'error': error, 'zeroFilledBytes': zero_filled,
             'protectionMode': 'engine-page-permissions-with-unknown-rwx' if image.unknown_permission_regions else 'engine-page-permissions',
             'unknownPermissionRegions': image.unknown_permission_regions, 'unknownPermissionPages': image.unknown_permission_pages,
             'pagePermissionMerges': image.page_permission_merges, 'pageSize': PAGE_SIZE, 'limitations': limitations}

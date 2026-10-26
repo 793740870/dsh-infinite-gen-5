@@ -117,3 +117,14 @@ dependency source archive/inventory, LLVM license, and unmodified Microsoft
 CRT provenance. See docs/LIFTER.md. Full LLVM corresponding source/toolchain
 is not bundled and no new public release or complete offline rebuild claim is
 made. IG5's NC terms do not cover Mergen or its third-party dependencies.
+
+LCM storage core: https://github.com/lossless-claude/lcm, MIT,
+revision 0c17dbffda452cf7fae46929af427dff355aeaa3 (0.16.0).
+Unmodified upstream ConversationStore, SummaryStore and SQLite migrations
+are bundled in third_party/lcm/core.mjs. That directory retains the full
+tracked upstream source archive, original LICENSE, per-input/output SHA-256
+provenance and licenses for safe-regex, regexp-tree, js-yaml and argparse.
+IG5 supplies its own exact DSH JSON event adapter and scoped retrieval API;
+upstream capture hooks, scrubber, daemon and model providers are not enabled.
+Build: scripts/build_lcm_vendor.mjs. Scope and proof: docs/LCM_THEORY.md.
+IG5's noncommercial license does not apply to these third-party components.

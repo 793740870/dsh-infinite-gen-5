@@ -38,7 +38,7 @@
         },
         {
           "source": "VMPBypass (local research workspace)",
-          "path": "C:\\Users\\Administrator\\Desktop\\VMPBypass",
+          "path": "C:\\Users\\IG5User\\Desktop\\VMPBypass",
           "relevance": "Methodology for separating disk/runtime states, distinguishing initialization/fixup from true VM execution, and extracting runtime bytecode."
         }
       ],
@@ -77,7 +77,7 @@
         "producerVersion": "3.11.0 build 2835 Demo",
         "producerSha256": "52e23d2f9c959a21bdc2067d03d29e20cd85995a202cb7f2116d89b19c88c527",
         "authenticodeValid": true,
-        "generationReceipt": "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\packed-suite-vmp311\\generation.json"
+        "generationReceipt": "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\packed-suite-vmp311\\generation.json"
       },
       "capabilities": [
         {
@@ -90,8 +90,8 @@
           "instructions": 25241,
           "inputCoverage": "1124 independent reference pairs, all-unsat SMT",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-compiled-add64-virtualization\\acceptance.json",
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-verified.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-compiled-add64-virtualization\\acceptance.json",
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-verified.json"
           ],
           "limitations": "Verified in recording environment for target function only; wholeBinaryVerified=false."
         },
@@ -105,8 +105,8 @@
           "instructions": 51465,
           "inputCoverage": "2409 reference pairs, 2 independent paths, all-unsat SMT",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-compiled-signed-select64-two-path-validated\\revalidation.json",
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-compiled-signed-select64-verified.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-compiled-signed-select64-two-path-validated\\revalidation.json",
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-compiled-signed-select64-verified.json"
           ],
           "limitations": "Two mutually exclusive paths verified; wholeBinaryVerified=false."
         },
@@ -120,7 +120,7 @@
           "instructions": 47365,
           "inputCoverage": "2409 reference pairs, 2 independent paths, all-unsat SMT",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-branch-mix64-virtualization-two-path-validated"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-branch-mix64-virtualization-two-path-validated"
           ],
           "limitations": "Two paths reach caller return; wholeBinaryVerified=false."
         },
@@ -134,8 +134,8 @@
           "instructions": 205,
           "inputCoverage": "2409 reference pairs, all-unsat SMT",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-branch-mix64-mutation-two-path-normalized\\revalidation.json",
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-round-mix64-mutation-owned-record-v1"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-branch-mix64-mutation-two-path-normalized\\revalidation.json",
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-round-mix64-mutation-owned-record-v1"
           ],
           "limitations": "Whole binary unverified."
         },
@@ -149,7 +149,7 @@
           "instructions": 59167,
           "inputCoverage": "2409 reference pairs, all-unsat SMT with MBA simplification",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-compiled-mul-mix32-ultra-long-budget\\acceptance.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-compiled-mul-mix32-ultra-long-budget\\acceptance.json"
           ],
           "limitations": "Single-function recovery; wholeBinaryVerified=false."
         },
@@ -163,7 +163,7 @@
           "instructions": 100000,
           "inputCoverage": "0 (prefix only, function did not return)",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-round-mix64-ultra-owned-record-v1\\receipt.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-round-mix64-ultra-owned-record-v1\\receipt.json"
           ],
           "limitations": "Instruction budget 100,000 reached without function return (196 parts, 18,166,919 bytes). Preserved as active hard failure without budget inflation."
         },
@@ -177,8 +177,8 @@
           "instructions": 16,
           "inputCoverage": "Page 0 and Page 8 audit sets, 15 core semantic fields match",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\tool-research\\runtime-coordinates-20261017-v1\\source-installed-core-audit.json",
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\tool-research\\runtime-coordinates-20261017-v1\\checkpoint.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\tool-research\\runtime-coordinates-20261017-v1\\source-installed-core-audit.json",
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\tool-research\\runtime-coordinates-20261017-v1\\checkpoint.json"
           ],
           "limitations": "Handler-level equation projection only; does not prove complete VM ISA, generic bytecode recovery or full function business semantics."
         }
@@ -205,7 +205,7 @@
           "instructions": 130,
           "inputCoverage": "2409 reference pairs per case, all-unsat SMT",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-upx-batch-verified.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-upx-batch-verified.json"
           ],
           "limitations": "Restored in memory snapshot execution model; compressed disk byte mismatch explicitly preserved; wholeBinaryVerified=false."
         }
@@ -233,8 +233,8 @@
           "instructions": 66614,
           "inputCoverage": "Output matches reference on 2409 pairs, but 640 full-window and 320 counterexample-prefix guards unresolved; coverage=single-recorded-path",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-round-mix64-enigma-classic-vm-scyllahide-store-round-v1\\receipt.json",
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-enigma-partial-verified.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\native-packed-round-mix64-enigma-classic-vm-scyllahide-store-round-v1\\receipt.json",
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\dsh-enigma-partial-verified.json"
           ],
           "limitations": "Accepted business models = 0. Real SAT counterexample found (x=0xbf8e3c24947ce2a2, y=0xfffbf3f707ab2019). Cannot claim business devirtualization."
         }
@@ -261,7 +261,7 @@
           "instructions": 0,
           "inputCoverage": "0",
           "evidence": [
-            "C:\\Users\\Administrator\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\oreans-generated\\template-cli-receipt.json"
+            "C:\\Users\\IG5User\\.dsh\\ig5\\artifacts\\modern-protection-20261014\\oreans-generated\\template-cli-receipt.json"
           ],
           "limitations": "Output quarantined by Windows Defender. Under strict security rules, quarantine is never bypassed or restored; security settings remain untouched. Accepted business models = 0."
         }

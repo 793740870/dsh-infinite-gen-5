@@ -9,7 +9,7 @@ import { modernOwnedImage, modernOwnedHarnessImage } from './fixtures/modern_own
 import { peExport } from './fixtures/pe_export.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
-const base = process.env.IG5_MODERN_EVIDENCE || 'C:/Users/Administrator/.dsh/ig5/artifacts/modern-protection-20261014';
+const base = process.env.IG5_MODERN_EVIDENCE || 'C:/Users/IG5User/.dsh/ig5/artifacts/modern-protection-20261014';
 const generation = JSON.parse(fs.readFileSync(path.join(base, process.env.IG5_MODERN_GENERATION || 'generated-vmp311', 'generation.json'), 'utf8'));
 const id = process.env.IG5_MODERN_CASE || 'add64', mode = process.env.IG5_MODERN_MODE || 'virtualization';
 const item = generation.rows.find(row => row.id === id && row.mode === mode);

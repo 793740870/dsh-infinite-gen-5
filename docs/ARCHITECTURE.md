@@ -1,6 +1,6 @@
 # IG5 1.1.0 架构
 
-桌面端保留 Core8 / Full40（25 只读、13 审批、2 生命周期/配置）。重构围绕执行协议、数据库身份、可移植 CPU 核心、独立采集和数据分析层，不以合并原生数据库作为统一的前提。状态分析与去混淆复用已有工具 action，不增加入口；数据分析只处理提供的证据与显式参数，不执行样本或修改原始输入/引擎数据库。
+桌面端保留 Core8 / Full43（28 个非审批静态入口、13 审批、2 生命周期/配置；“静态”指不做目标执行，不代表不写文件：`ig5_workspace`/`ig5_recovery` 会写任务存储与不可变报告；`ig5_package` 为 2026-10-24 的 P3 新增，`ig5_workspace`/`ig5_recovery` 为 2026-10-25 P2 从 `ig5_profile` 拆出）。重构围绕执行协议、数据库身份、可移植 CPU 核心、独立采集和数据分析层，不以合并原生数据库作为统一的前提。状态分析与去混淆复用已有工具 action，不增加入口；数据分析只处理提供的证据与显式参数，不执行样本或修改原始输入/引擎数据库。
 
 ```mermaid
 flowchart TD
@@ -33,7 +33,7 @@ flowchart TD
 | --- | --- | --- |
 | `index.js` | 工具注册、只读路由、审批、会话队列 | 写入修订守卫、取消分类、缓存失效 |
 | `source/worker_transport.js` | 子进程启动、JSONL 分帧、ready / doctor、RPC、超时与退出 | UTF-8 字节预算、启动队列预算、早退出、精确取消、单次完成 |
-| `workflow.js` | Core/Full、技能和命令的注册与清理 | 支持 scoped API 时全局 Core8、当前 agent 展开 Full40；旧宿主明确 instance 作用域；本地 state/state-validate/deobfuscate 仅调用限定只读 action |
+| `workflow.js` | Core/Full、技能和命令的注册与清理 | 支持 scoped API 时全局 Core8、当前 agent 展开 Full43；旧宿主明确 instance 作用域；本地 state/state-validate/deobfuscate 仅调用限定只读 action |
 | `source/host_platform.js` / `engine_runtime.js` | 执行设备身份、平台与原生依赖校验 | 手机浏览器不会改变 worker 的实际平台；不回落到不兼容的 Windows 包 |
 | `source/project_store.js` / `attachment_lease.js` / `address_ref.js` | artifact、attachment、进程所有者、数据库与地址身份 | 宿主及 worker 创建身份与 nonce；物理数据库排他；地址空间不可混用 |
 | `source/audit_history.js` / `patch_export.js` | 审计游标分页、补丁导出来源过滤 | 异步有界读取；当前 artifact/hash/engine 与映射核验；不重放旧样本补丁 |

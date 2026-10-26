@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { apply } from '../index.js';
 
 const root = path.resolve(import.meta.dirname, '..');
-const base = process.env.IG5_CORPUS_EVIDENCE || 'C:/Users/Administrator/.dsh/ig5/artifacts/corpus-expansion-20261014';
+const base = process.env.IG5_CORPUS_EVIDENCE || 'C:/Users/IG5User/.dsh/ig5/artifacts/corpus-expansion-20261014';
 const corpus = process.env.IG5_PROTECTION_CORPUS || path.join(base, 'corpus');
 const output = path.join(base, 'native-static');
 fs.mkdirSync(output, { recursive: true });
@@ -31,7 +31,7 @@ const receipt = { pluginRoot: root, sourceHashes: Object.fromEntries(['worker/tr
   nativeTargetExecuted: false, businessLogicRecovered: false, rows: [], limits: ['At most 128 discovered functions; selected main or largest listed function is not proof of VM entry.', 'Static import and local SSA analysis do not prove protected business logic.'] };
 const save = () => fs.writeFileSync(path.join(output, 'receipt.json'), JSON.stringify(receipt, null, 2));
 apply(ctx, { toolset: 'full', reverse: false, reverseProvider: 'bundled', artifactDir: path.join(output, 'analysis'), projectRoot: path.join(output, 'projects'), requestTimeoutMs: 90000, openTimeoutMs: 120000 });
-assert.equal(definitions.size, 40);
+assert.equal(definitions.size, 43);
 try {
   for (const relative of selected) {
     const pin = pins.find(p => p.file === relative), target = path.join(corpus, relative);

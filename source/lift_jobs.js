@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +41,7 @@ export class LiftJobs {
   }
 
   async request(params, signal, kind = 'lift') {
-    if (!['lift', 'project', 'project-recorded', 'compose','discover','decode-observed','flow-semantics'].includes(kind)) throw new Error('Unsupported owned analysis mode');
+    if (!['lift', 'project', 'project-recorded', 'compose','discover','decode-observed','flow-semantics','bv-candidate'].includes(kind)) throw new Error('Unsupported owned analysis mode');
     if (this.closed || signal?.aborted) throw cancelError();
     if (this.active.size >= 2) throw new Error('Mergen lifter busy; maximum two owned requests');
     if (!this.cfg.ghidra?.available || this.cfg.host?.id !== 'win32-x64') throw new Error('Mergen requires the bundled Windows x64 Python runtime');
@@ -49,8 +50,9 @@ export class LiftJobs {
     const child = this.spawnProcess(this.cfg.ghidra.pythonExe,
       ['-I', '-B', path.join(root, 'worker', kind === 'lift' ? 'ig5_lift.py' : 'ig5_project.py'), '--artifacts-root', this.artifacts.root],
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, cwd: root,
-        env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(SYSTEMROOT|WINDIR|TEMP|TMP)$/i.test(key))) });
-    const item = { child, dispatched: false, cleanupConfirmed: false, exited: false, stopIssued: false };
+        env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(SYSTEMROOT|WINDIR|TEMP|TMP)$/i.test(key))),
+          IG5_HOME: this.cfg.home || process.env.IG5_HOME || path.join(os.homedir(), '.dsh', 'ig5') } });
+    const item = { child, jobId: params.job_id, dispatched: false, cleanupConfirmed: false, exited: false, stopIssued: false };
     let settleStopped, client, grace;
     item.stopped = new Promise(resolve => { settleStopped = resolve; });
     const release = () => {

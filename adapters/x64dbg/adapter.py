@@ -30,8 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_policy import read_block, component_key, assert_launch_permitted, record_block, RuntimePolicyBlocked
 
 OPS = ["load", "start", "bpt", "unbpt", "regs", "setreg", "step", "stepover",
-       "cont", "suspend", "readmem", "writemem", "stop", "state", "event", "modules", "trace", "threads", "callstack"]
-CAPABILITIES = ["doctor", "open", "close", "dbg", *["dbg." + op for op in OPS], "dbg.hardware_breakpoint", "dbg.record_trace", "dbg.record_events", "cancel"]
+       "cont", "suspend", "readmem", "writemem", "stop", "state", "event", "modules", "trace", "threads", "callstack",
+       "apitrace"]
+CAPABILITIES = ["doctor", "open", "close", "dbg", *["dbg." + op for op in OPS], "dbg.hardware_breakpoint", "dbg.record_trace", "dbg.record_events", "dbg.api_trace", "cancel"]
 EVENT_NAMES = {"EVENT_BREAKPOINT": "breakpoint", "EVENT_SYSTEMBREAKPOINT": "system-breakpoint",
                "EVENT_STEPPED": "step", "EVENT_PAUSE_DEBUG": "paused", "EVENT_RESUME_DEBUG": "running",
                "EVENT_EXCEPTION": "exception", "EVENT_CREATE_PROCESS": "process-started",
@@ -130,9 +131,13 @@ class KillJob:
         self.handle, self.kernel = handle, kernel
 
     def close(self):
-        if self.handle:
-            self.kernel.CloseHandle(self.handle)
+        """True only when the job handle is gone. A failed CloseHandle keeps the handle so the caller can retry."""
+        if not self.handle:
+            return True
+        if self.kernel.CloseHandle(self.handle):
             self.handle = None
+            return True
+        return False
 
 
 class NativeClient:
@@ -566,6 +571,8 @@ class Adapter:
     def launch(self):
         if self.client:
             return
+        if self.proc is not None and self.proc.poll() is None:
+            raise RpcError("ESTATE", "the previous debugger process is not confirmed exited; close it before starting another", **self.cleanup_detail(False))
         if not self.target:
             raise ValueError("open a target before loading the debugger")
         bits = self.target["bits"]
@@ -735,8 +742,7 @@ class Adapter:
 
     def error_result(self, error):
         if error.code in ("ETIMEDOUT", "ECANCELLED", "EEXIT", "EJOB", "ETRANSPORT"):
-            self.cleanup()
-            error.detail.update(cleanedUp=True, **self.state(), debuggerPid=None, pid=None, tid=None)
+            error.detail.update(self.cleanup_detail(self.cleanup()))
         return {"code": error.code, "message": str(error), **error.detail}
 
     def service_controls(self):
@@ -773,8 +779,7 @@ class Adapter:
                 if payload.get("cleanedUp"):
                     raise
             except Exception as error:
-                self.cleanup()
-                failure = RpcError("EBACKEND", str(error), cleanedUp=True, **self.state(), debuggerPid=None, pid=None, tid=None)
+                failure = RpcError("EBACKEND", str(error), **self.cleanup_detail(self.cleanup()))
                 if self.respond:
                     self.respond({"id": request["id"], "error": {"code": failure.code, "message": str(failure), **failure.detail}})
                 raise failure from error
@@ -988,7 +993,7 @@ class Adapter:
             return started_result
         if not self.client:
             raise RpcError("ESTATE", "debugger is not loaded")
-        if op in ("regs", "setreg", "bpt", "unbpt", "step", "stepover", "cont", "readmem", "writemem", "modules", "trace", "threads", "callstack"):
+        if op in ("regs", "setreg", "bpt", "unbpt", "step", "stepover", "cont", "readmem", "writemem", "modules", "trace", "threads", "callstack", "apitrace"):
             self.require_pause()
             if self.pending_history_gap:
                 return {"op": op, **self.history_gap_result()}
@@ -1002,6 +1007,12 @@ class Adapter:
             sys.path.insert(0, str(Path(__file__).resolve().parent))
             from trace_recorder import record
             return record(self, p)
+        if op == 'apitrace':
+            if not isinstance(self.client, NativeClient):
+                raise RpcError('ENOTSUPPORTED', 'API tracing requires the owned native x64dbg bridge')
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from api_trace import trace
+            return trace(self, p)
         if op == "regs":
             if p.get('thread_id') is not None:
                 if not isinstance(self.client, NativeClient): raise RpcError('ENOTSUPPORTED', 'Selected thread context requires the owned native debugger')
@@ -1162,9 +1173,11 @@ class Adapter:
             if ctx:
                 with contextlib.suppress(Exception):
                     ctx.destroy(linger=0)
+        job_closed = True
         if self.job:
-            self.job.close()
-            self.job = None
+            job_closed = bool(self.job.close())
+            if job_closed:
+                self.job = None
         if proc and proc.poll() is None:
             with contextlib.suppress(Exception):
                 if os.name == "nt":
@@ -1174,12 +1187,16 @@ class Adapter:
                     proc.kill()
             with contextlib.suppress(Exception):
                 proc.wait(timeout=2)
+        exited = proc is None or proc.poll() is not None
         if proc and proc.stdin:
             with contextlib.suppress(Exception):
                 proc.stdin.close()
         if self.log:
             self.log.close()
             self.log = None
+        if not (job_closed and exited):
+            # 没有退出证据：保留进程与 Job 引用。调用方据此不得释放调试所有权，之后可以重试清理。
+            return False
         self.proc = None
         self.pid = self.tid = None
         self.native_run_epoch = None
@@ -1191,6 +1208,14 @@ class Adapter:
         with self.event_lock:
             self.events.clear()
             self.event_seq = 0
+        return True
+
+    def cleanup_detail(self, confirmed):
+        """Error-detail fields for a cleanup. cleanedUp may only be true with process-exit and job-close evidence."""
+        if confirmed:
+            return dict(cleanedUp=True, cleanupConfirmed=True, **self.state(), debuggerPid=None, pid=None, tid=None)
+        return dict(cleanedUp=False, cleanupConfirmed=False, state="cleanup-unconfirmed", stateCode=-2, runId=self.run_id,
+                    stopSeq=self.stop_seq, mode=self.mode, debuggerPid=getattr(self.proc, "pid", None))
 
     def dispatch(self, method, params, reset_cancel=True):
         if reset_cancel:
@@ -1208,7 +1233,9 @@ class Adapter:
             if method == "dbg":
                 return self.dbg(params)
             if method == "close":
-                self.cleanup()
+                confirmed = self.cleanup()
+                if not confirmed:
+                    raise RpcError("ECLEANUP", "debugger process exit could not be confirmed; ownership is retained, retry close", **self.cleanup_detail(False))
                 self.target = None
                 return {"ok": True, "engine": "x64dbg", "closed": True}
             raise RpcError("ENOMETHOD", "unknown adapter method")
@@ -1219,8 +1246,7 @@ class Adapter:
             raise RpcError("EINVAL", str(error)) from error
         except Exception as error:
             # A timed out ZMQ REQ socket cannot safely issue another request.
-            self.cleanup()
-            raise RpcError("EBACKEND", str(error), cleanedUp=True, **self.state(), debuggerPid=None, pid=None, tid=None) from error
+            raise RpcError("EBACKEND", str(error), **self.cleanup_detail(self.cleanup())) from error
         finally:
             self.deadline = None
 

@@ -421,13 +421,54 @@ class Worker:
         offset, limit = max(0, int(params.get('offset', 0))), bounded(params)
         return {'total': len(rows), 'offset': offset, 'strings': rows[offset:offset + limit]}
 
+    def reference_functions(self, address, limit=64):
+        """Functions that reference ``address``, as ([{ea, function:{ea,name}|None}], truncated).
+
+        A reference that sits inside a thunk (a PE jump stub or an ELF PLT entry) says nothing about who
+        uses the API, so it is replaced by the callers of that thunk. If a thunk has no callers it is kept.
+        """
+        references, functions, listing = self.program.getReferenceManager(), self.program.getFunctionManager(), self.program.getListing()
+        default_space = self.program.getAddressFactory().getDefaultAddressSpace()
+        rows, truncated = [], False
+
+        def describe(site):
+            function = functions.getFunctionContaining(site)
+            return {'ea': addrstr(site), 'function': None if function is None else
+                    {'ea': addrstr(function.getEntryPoint()), 'name': str(function.getName())}}
+
+        iterator = references.getReferencesTo(address)
+        while iterator.hasNext():
+            if len(rows) >= limit:
+                truncated = True
+                break
+            site = iterator.next().getFromAddress()
+            if site.getAddressSpace() != default_space or listing.getInstructionAt(site) is None:
+                continue
+            function = functions.getFunctionContaining(site)
+            if function is None or not function.isThunk():
+                rows.append(describe(site))
+                continue
+            found = False
+            callers = references.getReferencesTo(function.getEntryPoint())
+            while callers.hasNext():
+                if len(rows) >= limit:
+                    truncated = True
+                    break
+                caller = callers.next().getFromAddress()
+                if caller.getAddressSpace() == default_space and listing.getInstructionAt(caller) is not None:
+                    rows.append(describe(caller))
+                    found = True
+            if not found:
+                rows.append(describe(site))
+        return rows, truncated
+
     def m_scan(self, params):
         """The same bounded static-indicator schema as the Reverse provider."""
         self.require()
         shared = ADAPTER_ROOT.parent.parent / 'worker'
         if str(shared) not in sys.path:
             sys.path.insert(0, str(shared))
-        from scan_analysis import scan_image, scan_limits, api_category
+        from scan_analysis import scan_image, scan_limits, api_category, is_api_name_string
         from ghidra.program.util import DefinedDataIterator, GhidraProgramUtilities
         limits = scan_limits(params)
         default_space = self.program.getAddressFactory().getDefaultAddressSpace()
@@ -451,16 +492,11 @@ class Worker:
                 row = {'module': str(symbol.getParentNamespace()), 'api': name,
                        'externalAddress': str(address), 'addressSpace': str(address.getAddressSpace().getName())}
                 if api_category(name):
-                    references = []
-                    refs = self.program.getReferenceManager().getReferencesTo(address)
-                    for _ in range(9):
-                        if not refs.hasNext():
-                            break
-                        reference = refs.next().getFromAddress()
-                        if reference.getAddressSpace() == default_space:
-                            references.append(addrstr(reference))
+                    resolved, truncated = self.reference_functions(address, 64)
+                    references = [item['ea'] for item in resolved]
                     row['referenceEas'] = references[:8]
-                    row['referencesTruncated'] = len(references) > 8 or bool(refs.hasNext())
+                    row['referenceFunctions'] = resolved
+                    row['referencesTruncated'] = truncated
                     if references:
                         row.update(ea=references[0], addressSpace='memory', addressRole='import-reference')
                 yield row
@@ -472,11 +508,22 @@ class Worker:
                 # Short defined values preserve Ghidra's decoded character set.
                 if int(data.getLength()) > limits['max_string_chars'] * 4:
                     yield {'text': '', 'truncated': True}
+                    continue
+                text = str(data.getValue())
+                if is_api_name_string(text):
+                    resolved, _ = self.reference_functions(data.getAddress(), 16)
+                    yield {'text': text, 'apiNameCandidate': True, 'ea': addrstr(data.getAddress()), 'referenceFunctions': resolved}
                 else:
-                    yield str(data.getValue())
+                    yield text
 
         result = scan_image(segments(), imports(), strings(), source_engine='ghidra', params=params)
-        return {**result, 'revision': self.revision, 'sourceHash': self.source_hash,
+        # Packing is judged from the file on disk (headers, entry point, section entropy), not from what Ghidra mapped.
+        try:
+            from packer_analysis import analyze_packing
+            packing = analyze_packing(self.target)
+        except Exception as error:
+            packing = {'schema': 'ig5.packing.v1', 'status': 'error', 'error': type(error).__name__}
+        return {**result, 'packing': packing, 'revision': self.revision, 'sourceHash': self.source_hash,
                 'analysisComplete': bool(GhidraProgramUtilities.isAnalyzed(self.program))}
 
     def decompile(self, params):
@@ -494,9 +541,26 @@ class Worker:
     def m_decompile(self, params):
         function, result = self.decompile(params)
         code = str(result.getDecompiledFunction().getC())
+        try:
+            addresses = self.m_address_convert({'value': addrstr(function.getEntryPoint()), 'space': 'ghidra_va', 'to_space': 'elf_vaddr'})
+        except Exception:
+            addresses = {'status': 'unknown', 'ghidra_va': addrstr(function.getEntryPoint()), 'elf_vaddr': None}
         return {'ea': addrstr(function.getEntryPoint()), 'name': str(function.getName()),
                 'size': int(function.getBody().getNumAddresses()), 'lines': len(code.splitlines()), 'code': code,
-                'engine': 'Ghidra', 'revision': self.revision}
+                'engine': 'Ghidra', 'revision': self.revision, 'complete': True, 'addresses': addresses}
+
+    def m_address_convert(self, params):
+        from elf_addresses import program_mapping, convert
+        if any(key not in ('value', 'space', 'to_space') for key in params):
+            raise ValueError('address conversion accepts only value/space/to_space')
+        self.require()
+        loads, sources = program_mapping(self)
+        result = convert(params['value'], params['space'], params['to_space'], loads, sources)
+        return {'status': 'mapped', 'sourceSpace': params['space'], 'source': params['value'],
+                'space': params['to_space'], 'value': result, 'sourceHash': self.source_hash,
+                'mappingSource': 'Ghidra original FileBytes + exact memory source ranges + ELF PT_LOAD',
+                'moduleOffsetOrigin': hex(min(s['vaddr'] for s in loads)),
+                'runtimeLoadBias': None, 'runtimeMappingVerified': False}
 
     def read_bytes(self, address, size):
         if size < 1 or size > 16 * 1024 * 1024:
@@ -576,15 +640,21 @@ class Worker:
                 other = ref.getFromAddress() if direction == 'to' else ref.getToAddress()
                 fn = self.program.getFunctionManager().getFunctionContaining(other)
                 rows.append({'target': addrstr(target), 'other': addrstr(other), 'type': str(ref.getReferenceType()),
+                             'isCode': bool(ref.getReferenceType().isFlow()), 'isData': bool(ref.getReferenceType().isData()),
+                             'isRead': bool(ref.getReferenceType().isRead()), 'isWrite': bool(ref.getReferenceType().isWrite()),
+                             'isCall': bool(ref.getReferenceType().isCall()), 'source': 'Ghidra reference manager',
                              'func': str(fn.getName()) if fn else None, 'func_ea': addrstr(fn.getEntryPoint()) if fn else None})
         return {'total': len(rows), 'hits': rows[:bounded(params)], 'targets': list(map(addrstr, targets))}
 
     def m_calls(self, params):
+        from result_capture import captured_rows
         function, direction = self.function(params), params.get('direction', 'callees')
         functions = function.getCallingFunctions(self.monitor(params)) if direction == 'callers' else function.getCalledFunctions(self.monitor(params))
         rows = [{'ea': addrstr(fn.getEntryPoint()), 'name': str(fn.getName()), 'refs': 1} for fn in functions]
+        selected = captured_rows(rows, bounded(params), params.get('result_capture_bytes'))
         return {'ea': addrstr(function.getEntryPoint()), 'name': str(function.getName()), 'direction': direction,
-                'total': len(rows), 'calls': rows[:bounded(params)], 'refsMeaning': 'unique function relationship'}
+                'total': len(rows), 'calls': selected, 'complete': len(selected) == len(rows),
+                'refsMeaning': 'unique function relationship', 'truncated': len(selected) < len(rows)}
 
     def m_search(self, params):
         self.require()
@@ -773,7 +843,8 @@ class Worker:
                            'language': str(self.program.getLanguageID()), 'artifactSHA256': self.source_hash,
                            'function': addrstr(function.getEntryPoint()), 'revision': self.revision}}
 
-    def m_emulate(self, params):
+    def emulation_setup(self, params, entry=None):
+        """(image, execution params, arch, bits) for CPU emulation of this program; ``entry`` defaults to the named function."""
         self.require()
         if os.name != 'nt':
             raise UnsupportedError('CPU emulation requires a validated native Unicorn runtime for this host platform')
@@ -781,13 +852,13 @@ class Worker:
         if str(shared) not in sys.path:
             sys.path.insert(0, str(shared))
         from memory_image import MemoryImage, MemoryRegion, PERM_READ, PERM_WRITE, PERM_EXEC
-        from cpu_emulator import emulate_image
         bits = int(self.program.getLanguage().getDefaultSpace().getSize())
         processor = str(self.program.getLanguage().getProcessor()).lower()
         arch = 'arm64' if processor in ('aarch64', 'arm64') else 'x86' if processor in ('x86', 'i386') else None
         if arch is None or (arch == 'arm64' and self.program.getLanguage().isBigEndian()):
             raise UnsupportedError('CPU emulation supports little-endian x86/x64 and ARM64 targets only')
         execution = dict(params)
+        execution.pop('mode', None)
         if not execution.get('abi'):
             compiler = str(self.program.getCompilerSpec().getCompilerSpecID()).lower()
             if arch == 'arm64':
@@ -800,7 +871,8 @@ class Worker:
                 execution['abi'] = 'sysv64'
             else:
                 raise ValueError('Specify abi explicitly for this unclassified x64 compiler specification')
-        entry = self.function(params).getEntryPoint()
+        if entry is None:
+            entry = self.function(params).getEntryPoint()
         regions = []
         for block in self.program.getMemory().getBlocks():
             # Non-default/overlay address spaces cannot be flattened into native
@@ -818,7 +890,46 @@ class Worker:
                                                     (PERM_WRITE if block.isWrite() else 0) |
                                                     (PERM_EXEC if block.isExecute() else 0)))
         image = MemoryImage(arch, bits, int(entry.getOffset()) & ((1 << bits) - 1), regions, source='ghidra')
+        return image, execution, arch, bits
+
+    def m_emulate(self, params):
+        if params.get('mode') == 'decode_strings':
+            return self.decode_strings(params)
+        if params.get('mode') not in (None, 'function'):
+            raise ValueError('mode must be function or decode_strings')
+        from cpu_emulator import emulate_image
+        image, execution, _, _ = self.emulation_setup(params)
         return {**emulate_image(image, execution), 'idb_modified': False, 'revision': self.revision}
+
+    def decode_strings(self, params):
+        """Find string/config decoder routines and decode their call sites by emulation (read-only)."""
+        self.require()
+        shared = ADAPTER_ROOT.parent.parent / 'worker'
+        if str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        from string_decoding import decode_strings, limits_from
+        limits = limits_from(params)
+        functions = self.program.getFunctionManager()
+        forced = self.function(params) if (params.get('ea') or params.get('name')) else None
+        first = forced if forced is not None else next(iter(each(functions.getFunctions(True))), None)
+        if first is None:
+            raise ValueError('the program has no functions to scan')
+        # The image needs some entry address inside it; each emulated call replaces it with the decoder's own entry.
+        image, execution, arch, bits = self.emulation_setup(params, first.getEntryPoint())
+        if arch != 'x86' or bits != 64:
+            raise UnsupportedError('decode_strings currently supports x86-64 call sites only')
+        if str(ADAPTER_ROOT) not in sys.path:
+            sys.path.insert(0, str(ADAPTER_ROOT))
+        from decode_scan import collect_candidates
+        from cpu_emulator import emulate_image
+        scan = collect_candidates(self.program, execution['abi'], limits, each, addrstr, forced)
+        snapshot = image.snapshot()
+        def run(entry, args, scratch):
+            return emulate_image(snapshot.with_entry(entry), {'abi': execution['abi'], 'args': [hex(value) for value in args],
+                                                              'memory': scratch, 'trace_writes': True, 'max_instructions': 200000, 'timeout_ms': 1000})
+        result = decode_strings(scan['candidates'], run, params, considered=scan['functionsConsidered'])
+        result['truncation']['functionScan'] = scan['truncated']
+        return {**result, 'sourceEngine': 'ghidra', 'abi': execution['abi'], 'idb_modified': False, 'revision': self.revision}
 
     def m_slice(self, params):
         function, result = self.decompile(params)

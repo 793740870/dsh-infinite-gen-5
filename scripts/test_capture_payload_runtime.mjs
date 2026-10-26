@@ -45,7 +45,7 @@ try {
   apply(ctx, { artifactDir: path.join(scratch, 'artifacts'), projectRoot: path.join(scratch, 'projects'),
     toolset: 'full', reverseProvider: 'bundled', defaultEngine: 'reverse', backgroundOpen: false,
     requestTimeoutMs: 120000, openTimeoutMs: 180000 });
-  assert.equal(definitions.size, 40);
+  assert.equal(definitions.size, 43);
   const scope = ['http://127.0.0.1:' + origin.address().port];
   const session = await call('ig5_capture_control', { action: 'start', scope, port: 0 });
   const delivered = await new Promise((resolve, reject) => {
@@ -82,7 +82,7 @@ try {
   assert(opened.n_funcs >= 16); assert.equal(opened.partial, false);
   nativeStaticEngine = true; stageReached = 'native-static-open';
   const target = sample.path;
-  const created = (await call('ig5_profile', { target, workspace: { action: 'create',
+  const created = (await call('ig5_workspace', { target, workspace: { action: 'create',
     goal: '解释捕获的模块分支函数', hypothesis: '测试模块根据参数返回不同值', next_step: '获取函数证据包' } })).workspace;
   const dossier = await call('ig5_decompile', { target, ea: fixture.addresses.branch, style: 'dossier',
     task_id: created.taskId, dossier_max_bytes: 16000, dossier_max_rows: 32 });
@@ -91,7 +91,7 @@ try {
   for (const section of Object.values(dossier.sections)) assert(['ok', 'truncated'].includes(section.status));
   const decompiled = JSON.stringify(dossier.sections.decompile);
   assert.match(decompiled, /return/); assert.match(decompiled, /ig5_fixture_branch/);
-  const savedTask = (await call('ig5_profile', { target, workspace: { action: 'get', id: created.taskId } })).workspace;
+  const savedTask = (await call('ig5_workspace', { target, workspace: { action: 'get', id: created.taskId } })).workspace;
   assert.equal(savedTask.systemEvidence.length, 1);
   assert.equal(savedTask.systemEvidence[0].stale, false);
   assert.equal((await call('ig5_status', {})).sessions.find(row => row.target === target).dbRevision, opened.dbRevision);

@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';import {pathToFileURL} from 'node:url';
 const args=process.argv.slice(2),option=name=>args[args.indexOf(name)+1],hash=b=>createHash('sha256').update(b).digest('hex');
 assert(args.includes('--out') && args.includes('--plugin-root'),'Explicit new output directory and plugin root required');
 const MAIN=fs.realpathSync(option('--plugin-root')),OUT=path.resolve(option('--out'));fs.mkdirSync(OUT,{recursive:false});
-const prior='C:/Users/Administrator/Desktop/无限五代/_research/entry-context-invariants-20261016-v1';
+const prior='C:/Users/IG5User/Desktop/无限五代/_research/entry-context-invariants-20261016-v1';
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 const first=read(path.join(prior,'handler-public-verified.json')).cases.find(c=>c.id==='first-handler-and-dispatch27');
 const second=read(path.join(prior,'handler136-public-verified.json')).cases.find(c=>c.id==='second-handler-and-dispatch22');

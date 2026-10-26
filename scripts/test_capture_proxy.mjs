@@ -344,3 +344,20 @@ test('chunked request and response trailers reach both peers and captured eviden
   assert.equal(captured[0].response.trailers['x-response-digest'], 'fixture-response');
   assert.equal(captured[0].complete, true);
 });
+
+
+for (const [name, reply, partial, expectedFrames] of [
+  ['unfinished uncompressed message', frame(Buffer.from('A'), {fin:false}), true, 1],
+  ['new data during fragment', Buffer.concat([frame(Buffer.from('A'), {fin:false}),frame(Buffer.from('B'))]), true, 1],
+  ['continuation without start', frame(Buffer.from('B'), {opcode:0}), true, 0],
+  ['ping preserves fragment and next message is allowed', Buffer.concat([frame(Buffer.from('A'), {fin:false}),frame(Buffer.alloc(0), {opcode:9}),frame(Buffer.from('B'), {opcode:0}),frame(Buffer.from('C'))]), false, 4],
+]) test('WebSocket message state: '+name, async t => {
+  const captured=[], payload=frame(Buffer.alloc(0), {masked:true,opcode:9}),origin=http.createServer();
+  wsOrigin(origin,payload.length,reply);const port=await listen(origin),url=`http://127.0.0.1:${port}`;
+  const proxy=new CaptureProxy({onExchange:e=>captured.push(e)});
+  t.after(async()=>{await proxy.stop();await close(origin);});
+  const address=await proxy.start({scope:[url]});await wsTransfer(address,url,payload);
+  await until(()=>captured.some(e=>e.websocketHandshake));
+  assert.equal(captured.find(e=>e.websocketHandshake).websocket.partial,partial);
+  assert.equal(captured.filter(e=>e.protocol==='websocket'&&e.websocket.direction==='server_to_client').length,expectedFrames);
+});

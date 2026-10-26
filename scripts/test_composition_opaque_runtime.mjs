@@ -4,7 +4,7 @@ import {spawn}from'node:child_process';import{pathToFileURL}from'node:url';impor
 const argv=process.argv.slice(2),option=k=>argv[argv.indexOf(k)+1],hash=b=>createHash('sha256').update(b).digest('hex');
 assert(argv.includes('--out')&&argv.includes('--plugin-root'));
 const ROOT=fs.realpathSync(option('--plugin-root')),OUT=path.resolve(option('--out'));fs.mkdirSync(OUT,{recursive:false});
-const prior='C:/Users/Administrator/Desktop/无限五代/_research/entry-context-invariants-20261016-v1',read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
+const prior='C:/Users/IG5User/Desktop/无限五代/_research/entry-context-invariants-20261016-v1',read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 const entry=read(path.join(prior,'entry-public-verified.json'));
 assert(entry.passed&&hash(fs.readFileSync(entry.result.reportPath))===entry.result.reportSha256);
 const a=read(path.join(prior,'handler-public-verified.json')).cases.find(c=>c.id==='first-handler-and-dispatch27');

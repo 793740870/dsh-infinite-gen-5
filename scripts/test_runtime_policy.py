@@ -93,4 +93,44 @@ class RuntimePolicyTests(unittest.TestCase):
         result = json.loads(child.stdout)
         self.assertFalse(result['ok']); self.assertFalse(result['launchReadiness']['64']['nativeLaunchAttempted'])
 
+class DecoderPolicyTests(unittest.TestCase):
+    def setUp(self):
+        import types
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'worker'))
+        import kernel_analysis
+        self.module = kernel_analysis
+        self.temp = tempfile.TemporaryDirectory(prefix='ig5-decoder-policy-')
+        self.home = Path(self.temp.name); self.library = self.home / 'fake-decoder.dll'
+        self.library.write_bytes(b'not a native library')
+        self.error = OSError('synthetic decoder 4551'); self.error.winerror = 4551
+        self.env = patch.dict(os.environ, {'IG5_HOME': str(self.home)}); self.env.start()
+        self.bootstrap = patch.dict(sys.modules, {'native_bootstrap': types.SimpleNamespace(bootstrap_windows_dlls=lambda _: None)}); self.bootstrap.start()
+    def tearDown(self):
+        self.bootstrap.stop(); self.env.stop(); self.temp.cleanup()
+    def test_existing_block_precedes_loader(self):
+        record_block(self.home / 'runtime-policy-blocks', self.library, self.error)
+        with patch.object(self.module.c, 'CDLL') as loader:
+            with self.assertRaises(RuntimePolicyBlocked): self.module.load_native_decoder(self.library, self.home)
+            loader.assert_not_called()
+    def test_first_4551_persists_and_new_adapter_refuses_retry(self):
+        with patch.object(self.module.c, 'CDLL', side_effect=self.error) as loader:
+            with self.assertRaises(OSError) as raised: self.module.load_native_decoder(self.library, self.home)
+            self.assertIs(raised.exception, self.error)
+            self.assertIsNotNone(read_block(self.home / 'runtime-policy-blocks', self.library))
+            self.module._native_policy_denied.clear()
+            with self.assertRaises(RuntimePolicyBlocked): self.module.load_native_decoder(self.library, self.home)
+            self.assertEqual(loader.call_count, 1)
+    def test_persistence_failure_still_remembers_block_in_process(self):
+        with patch('runtime_policy.record_block', side_effect=OSError('read-only policy store')), patch.object(self.module.c, 'CDLL', side_effect=self.error) as loader:
+            with self.assertRaises(OSError) as raised: self.module.load_native_decoder(self.library, self.home)
+            self.assertIs(raised.exception, self.error)
+            with self.assertRaises(RuntimePolicyBlocked): self.module.load_native_decoder(self.library, self.home)
+            self.assertEqual(loader.call_count, 1)
+    def test_ordinary_loader_error_is_not_policy(self):
+        with patch.object(self.module.c, 'CDLL', side_effect=OSError('ordinary missing dependency')) as loader:
+            for _ in range(2):
+                with self.assertRaises(OSError): self.module.load_native_decoder(self.library, self.home)
+            self.assertEqual(loader.call_count, 2)
+            self.assertIsNone(read_block(self.home / 'runtime-policy-blocks', self.library))
+
 if __name__ == '__main__': unittest.main(verbosity=2)

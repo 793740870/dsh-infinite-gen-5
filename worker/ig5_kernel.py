@@ -72,7 +72,10 @@ def main():
         else: raise ValueError('Kernel action must be info, analyze, vtables or decompile')
         emit({'id': request.get('id'), 'result': result})
     except Exception as error:
-        emit({'id': request.get('id'), 'error': {'code': 'KERNEL_FAILED', 'message': str(error)[:4000]}})
+        detail = {'code': getattr(error, 'code', 'KERNEL_FAILED'), 'message': str(error)[:4000]}
+        for field in ('runtimePolicyBlock', 'policyStateError', 'nativeLaunchAttempted'):
+            if hasattr(error, field): detail[field] = getattr(error, field)
+        emit({'id': request.get('id'), 'error': detail})
 
 
 if __name__ == '__main__': main()

@@ -24,6 +24,42 @@ class Context(c.Structure):
     _fields_ = [('name', c.c_char_p), ('value', c.c_uint32)]
 
 
+_native_policy_denied = {}
+
+
+def load_native_decoder(library, java_home):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'adapters' / 'x64dbg'))
+    from runtime_policy import assert_launch_permitted, record_block, component_key, RuntimePolicyBlocked
+    root = Path(os.environ.get('IG5_HOME') or Path.home() / '.dsh/ig5') / 'runtime-policy-blocks'
+    key = component_key(library)
+    try:
+        if key in _native_policy_denied:
+            raise RuntimePolicyBlocked(_native_policy_denied[key])
+        assert_launch_permitted(root, library)
+    except RuntimePolicyBlocked as prior:
+        error = RuntimePolicyBlocked(prior.record, 'Decoder policy block is known or unverified; no DLL load attempted')
+        error.code = 'RUNTIME_POLICY_BLOCKED'
+        error.runtimePolicyBlock = prior.record
+        error.nativeLaunchAttempted = False
+        raise error from prior
+    from native_bootstrap import bootstrap_windows_dlls
+    crt = bootstrap_windows_dlls(java_home)
+    try:
+        return crt, c.CDLL(str(library))
+    except OSError as error:
+        if getattr(error, 'winerror', None) == 4551:
+            error.code = 'RUNTIME_POLICY_BLOCKED'
+            error.nativeLaunchAttempted = True
+            _native_policy_denied[key] = None
+            try:
+                _native_policy_denied[key] = record_block(root, library, error)
+                error.runtimePolicyBlock = _native_policy_denied[key]
+            except Exception as persistence_error:
+                error.policyStateError = type(persistence_error).__name__
+        raise
+
+
 class SleighDecoder:
     def __init__(self, runtime_root, ghidra_home, java_home):
         if os.name != 'nt' or c.sizeof(c.c_void_p) != 8:
@@ -36,9 +72,7 @@ class SleighDecoder:
         import sys
         adapter = Path(__file__).resolve().parent.parent / 'adapters' / 'ghidra'
         sys.path.insert(0, str(adapter))
-        from native_bootstrap import bootstrap_windows_dlls
-        self.crt = bootstrap_windows_dlls(java_home)
-        self.library = c.CDLL(str(library))
+        self.crt, self.library = load_native_decoder(library, java_home)
         self.function = self.library.ig5_sleigh_decode
         self.function.argtypes = [c.c_void_p, c.c_size_t, c.c_void_p, c.c_size_t, c.c_uint64,
                                   c.POINTER(Context), c.c_size_t, c.c_size_t, c.c_void_p, c.c_size_t, c.POINTER(c.c_size_t)]

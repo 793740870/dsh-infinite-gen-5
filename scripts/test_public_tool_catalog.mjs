@@ -25,15 +25,10 @@ const temporaryRoot = fs.realpathSync(os.tmpdir());
 const scratch = fs.mkdtempSync(path.join(temporaryRoot, 'ig5-public-catalog-中文 '));
 const originalEnvironment = { ...process.env };
 const configuredReverse = { idaDir: process.env.IG5_IDA_DIR, pythonExe: process.env.IG5_PYTHON };
-const tools = new Map(), events = new Map(), routes = new Map(), effects = [], checks = [];
+const tools = new Map(), events = new Map(), eventListeners = new Map(), routes = new Map(), effects = [], checks = [];
 const approvalChecks = [], fixtures = [], targets = [], opened = [];
-const expectedNames = [
-  'doctor', 'open', 'status', 'funcs', 'strings', 'decompile', 'xrefs', 'calls', 'bytes', 'search', 'listing', 'scan',
-  'export_diff', 'cfg', 'slice', 'fingerprint', 'rename', 'patch_bytes', 'comment', 'analyze', 'set_type', 'undo',
-  'run_idapython', 'dbg', 'struct', 'close', 'profile', 'stack', 'switches', 'switch_repair', 'vtables', 'microcode',
-  'bindiff', 'emulate', 'ir', 'sync', 'crypto', 'protocol', 'capture', 'capture_control',
-].map(v => 'ig5_' + v);
-const writeNames = ['rename', 'patch_bytes', 'comment', 'analyze', 'set_type', 'undo', 'run_idapython', 'dbg', 'struct', 'switch_repair', 'emulate', 'sync', 'capture_control'].map(v => 'ig5_' + v);
+// 工具分类的唯一事实来源见 fixtures/tool_classification.mjs（由 test_tool_classification 与产品闸门对账）。
+const { ALL_TOOLS: expectedNames, APPROVAL_GATED: writeNames } = await import('./fixtures/tool_classification.mjs');
 let failure, cleanupSucceeded = false, engineReports = [], approvalSequence = 0;
 const executionAgent = { id: 'public-catalog-acceptance' };
 const approvalState = { outcome: 'allowed-once', requests: [] };
@@ -58,7 +53,15 @@ const context = {
   tools: { register(definition) { assert(!tools.has(definition.name)); tools.set(definition.name, definition); return () => tools.delete(definition.name); } },
   get(name) { return name === 'webServer' ? context.webServer : name === 'approval' ? approvalService : undefined; },
   webServer: { register(spec) { assert(!routes.has(spec.path)); routes.set(spec.path, spec.handler); return () => routes.delete(spec.path); } },
-  on(name, handler) { assert(!events.has(name)); events.set(name, handler); return () => events.delete(name); },
+  on(name, handler) {
+    const listeners = eventListeners.get(name) || new Set();
+    // Native lifecycle notifications legitimately have multiple subscribers.
+    // The gate/audit checks below still require exactly one tool middleware.
+    if (name.startsWith('tools/')) assert.equal(listeners.size, 0);
+    listeners.add(handler); eventListeners.set(name, listeners);
+    events.set(name, (...args) => listeners.size === 1 ? [...listeners][0](...args) : Promise.all([...listeners].map(fn => fn(...args))));
+    return () => { listeners.delete(handler); if (!listeners.size) { events.delete(name); eventListeners.delete(name); } };
+  },
   inject(names, callback) {
     const remove = names.every(name => context.get(name)) ? callback({ get: context.get, webServer: context.webServer }) : undefined;
     const dispose = async () => { if (typeof remove === 'function') await remove(); };
@@ -154,15 +157,23 @@ try {
     assert.equal(allowed.kind, 'allow'); assert.equal(allowedDelegations, 1);
     approvalChecks.push({ tool: name, publicServiceRequested: true, rejectedDecision: 'deny', deniedDispatchCalls, allowedOnceDelegations: allowedDelegations });
   }
-  await check('ig5_profile', 'host', 'Full40 / Core8 / Full40 schemas', async () => {
+  await check('ig5_profile', 'host', 'Full43 / Core8 / Full43 schemas', async () => {
     assert.equal((await call('ig5_profile', { toolset: 'core' })).activeTools.length, 8); assert.equal(tools.size, 8);
-    const full = await call('ig5_profile', { toolset: 'full' }); assert.equal(full.activeTools.length, 40); assert.equal(tools.size, 40);
+    const full = await call('ig5_profile', { toolset: 'full' }); assert.equal(full.activeTools.length, 43); assert.equal(tools.size, 43);
     for (const engine of requestedEngines) assert.equal(full.engines.find(e => e.id === engine)?.available, true, engine + ' must actually be available');
     if (reverseProvider === 'bundled') {
       const reverse = full.engines.find(e => e.id === 'reverse');
       assert.equal(reverse.available, true); assert.equal(reverse.provider, 'ghidra'); assert.match(reverse.label, /内置/);
     }
-    return { core: 8, full: 40, approvalTools: approvalChecks.length };
+    return { core: 8, full: 43, approvalTools: approvalChecks.length };
+  });
+  await check('ig5_recovery', 'host', 'fixed case_ref saves an immutable plan report', async () => {
+    const bytes = fs.readFileSync(path.join(pluginRoot, 'scripts/fixtures/vm_recovery_case.example.json'));
+    const casePath = path.join(scratch, 'recovery-case.json'); fs.writeFileSync(casePath, bytes, { flag: 'wx' });
+    const value = await call('ig5_recovery', { recovery: { case_ref: { path: casePath, sha256: hash(bytes) } } }, undefined, null);
+    assert.equal(value.recovery.executionPerformed, false); assert.equal(value.recovery.changesExecutionAuthority, false);
+    assert.equal(hash(fs.readFileSync(value.recovery.reportPath)), value.recovery.reportSha256);
+    return { executionPerformed: false, reportSaved: true, caseSha256: value.recovery.caseSha256 };
   });
   await check('ig5_capture', 'host', 'dormant independent capture status', async () => { const value = await call('ig5_capture', { action: 'status' }, undefined, null); assert.equal(value.running, false); return value; });
   await check('ig5_capture_control', 'host', 'approved loopback listener lifecycle', async () => { const value = await call('ig5_capture_control', { action: 'start', scope: ['http://127.0.0.1:1'], port: 0 }, undefined, null); assert(value.running); const stopped = await call('ig5_capture_control', { action: 'stop', session_id: value.session_id }, undefined, null); assert.equal(stopped.running, false); return { started: true, stopped: true, networkExchangeValidation: 'scripts/test_capture_host.mjs and scripts/test_capture_proxy.mjs' }; });
@@ -179,6 +190,11 @@ try {
     });
   }
   const fixture = fixtures[0], ea = fixture.addresses.add;
+  await check('ig5_workspace', 'host', 'explicit-target investigation list stays read-only', async () => {
+    const value = await call('ig5_workspace', { workspace: { action: 'list' } });
+    assert(Array.isArray(value.workspace.tasks)); assert.equal(value.workspace.tasks.length, 0);
+    return { action: 'list', tasks: 0, arbitraryPathAccepted: false };
+  });
   for (const engine of requestedEngines) {
     await check('ig5_status', engine, 'live scoped native database', async () => {
       const value = await call('ig5_status'); const session = value.sessions.find(s => s.engine === engine && s.target === targets[0]);
@@ -418,6 +434,15 @@ try {
     assert.equal(value.value.complete, true); assert.equal(value.value.frames.length, 1); const fields = value.value.frames[0].fields;
     assert.equal(fields.find(row => row.name === 'length').value, 5); assert.equal(fields.find(row => row.name === 'text').value, 'Hello'); return { frames: 1, text: 'Hello' };
   });
+  await check('ig5_package', 'data', 'generated APK: manifest, method-level SMS call site, debug signature and saved section read', async () => {
+    const { minimalApk } = await import('./fixtures/apk_sample.mjs');
+    const apk = path.join(scratch, 'generated sample.apk'); fs.writeFileSync(apk, minimalApk());
+    const value = await call('ig5_package', { action: 'apk', input: { path: apk } });
+    assert.equal(value.kind, 'apk'); assert.equal(value.value.overview.package, 'com.example.tool');
+    const rules = await call('ig5_package', { action: 'result', result_id: value.result_id, select: 'capabilities.rules' });
+    const sms = rules.value.find(rule => rule.id === 'sms.send'); assert(sms && sms.samples[0].method === 'Lcom/example/tool/Main;->go()V');
+    return { package: value.value.overview.package, smsCallSite: sms.samples[0].method };
+  });
   if (executeDebugger) await check('ig5_dbg', 'x64dbg', 'generated PE headless breakpoint / registers / memory / step / stop', async () => {
     const engine = requestedEngines.includes('ghidra') ? 'ghidra' : requestedEngines[0];
     const debug = (op, args = {}) => call('ig5_dbg', { backend: 'x64dbg', op, timeout: 15, ...args }, engine);
@@ -470,7 +495,7 @@ finally {
     engineReports, coverage, checks, cleanupSucceeded, ...(failure ? { error: failure } : {}),
     execution: 'Real public definition.execute → native Reverse/Ghidra workers; real bundled Unicorn; x64dbg executes only a generated PE64.',
     hostBoundary: 'A controlled public approval.request service exercises the real plugin gate with agent/callId/signal. Rejected decisions must not call next; allowed-once delegates once. The actual DSH SDK dispatch is exercised separately in isolation by test_host_sdk.mjs. The desktop consent dialog is not verified by either suite.',
-    boundaries: ['One generated PE64 pair; no arbitrary-binary guarantee.', 'Unsupported engine/tool pairs are recorded separately and do not count as successful execution.', 'No Android/iOS native runtime claim.', 'Bundled Full40 uses independent Reverse/Ghidra databases with disclosed Ghidra provider and enabled x64dbg; no commercial installation required. Python compatibility is a documented subset, p-code stages are not proprietary microcode equivalents.'],
+    boundaries: ['One generated PE64 pair; no arbitrary-binary guarantee.', 'Unsupported engine/tool pairs are recorded separately and do not count as successful execution.', 'No Android/iOS native runtime claim.', 'Bundled Full43 uses independent Reverse/Ghidra databases with disclosed Ghidra provider and enabled x64dbg; no commercial installation required. Python compatibility is a documented subset, p-code stages are not proprietary microcode equivalents.'],
   };
   fs.mkdirSync(reportDirectory, { recursive: true }); fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
   console.log(JSON.stringify({ ok: report.ok, passedToolCount: covered, approvalToolCount: approvalChecks.length, report: reportFile }));

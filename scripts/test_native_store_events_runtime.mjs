@@ -62,7 +62,7 @@ try {
   const trace = await dbg('trace', { record_trace: true, record_events: true, max_steps: 4 });
   assert.equal(trace.traceSaved, true, trace.traceArtifactError); assert.equal(trace.traceSummary.instructionCount, 3); assert.equal(trace.traceSummary.stopReason, 'returned');
   assert.equal(trace.storeEvents.groups, 3); assert.equal(trace.storeEvents.completeDecodedStoreGroups, 3);
-  const observed = await call('ig5_profile', { recovery: { observations: { recordings: [{ id: trace.traceReportId, sha256: trace.traceReportSha256 }], target_sha256: targetSha256, limit: 3 } } });
+  const observed = await call('ig5_recovery', { recovery: { observations: { recordings: [{ id: trace.traceReportId, sha256: trace.traceReportSha256 }], target_sha256: targetSha256, limit: 3 } } });
   const full = JSON.parse(fs.readFileSync(observed.observations.reportPath)).result;
   const write = full.stopGroups[0].memoryWrites;
   assert.equal(write.stores.length, 1); assert.equal(write.stores[0].afterHex, 'f0debc9a78563412');
@@ -79,7 +79,7 @@ try {
     assert.equal(replay.traceSaved, true, replay.traceArtifactError); assert.equal(replay.traceSummary.instructionCount, 3);
     assert.equal(replay.traceSummary.stopReason, 'returned'); assert.equal((await dbg('regs')).regs.rax, value);
     if (recordEvents) {
-      const view = await call('ig5_profile', { recovery: { observations: { recordings: [{ id: replay.traceReportId, sha256: replay.traceReportSha256 }], target_sha256: targetSha256, limit: 3 } } });
+      const view = await call('ig5_recovery', { recovery: { observations: { recordings: [{ id: replay.traceReportId, sha256: replay.traceReportSha256 }], target_sha256: targetSha256, limit: 3 } } });
       const raw = JSON.parse(fs.readFileSync(view.observations.reportPath)).result;
       assert.equal(raw.stopGroups[0].memoryWrites.stores[0].changed, false);
       assert.equal(raw.stopGroups[0].memoryWrites.stores[0].status, 'observed');

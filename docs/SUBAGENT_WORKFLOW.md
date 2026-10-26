@@ -17,13 +17,13 @@
 
 以下旧接口示例中，省略 handoff_id 的 review 只作完整性预检查。
 
-通过现有 `ig5_profile workspace` 交接静态调查，保持 Core8/Full40、八个技能和十三个审批入口。插件不调用模型、不派出代理。父代理使用 DSH 原生派工能力，把交接响应作为任务上下文；目前没有自动拦截宿主派工或强制子代理阅读的功能。
+通过现有 `ig5_workspace` 交接静态调查，保持 Core8/Full40、八个技能和十三个审批入口。插件不调用模型、不派出代理。父代理使用 DSH 原生派工能力，把交接响应作为任务上下文；目前没有自动拦截宿主派工或强制子代理阅读的功能。
 
 ## 父代理准备
 
 先确认明确的 target、engine、当前调查任务和 taskRevision。必要时先收集少量 `ig5_decompile style=dossier task_id=...`，随后重读任务，因为捕获证据会增加 taskRevision。
 
-调用 `ig5_profile`，显式指定 target、engine 和以下 workspace：
+调用 `ig5_workspace`，显式指定 target、engine 和以下 workspace：
 
 ```json
 {

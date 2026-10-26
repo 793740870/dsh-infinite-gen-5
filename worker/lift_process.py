@@ -144,7 +144,7 @@ def run_owned(executable, arguments, directory, *, budget_ms=50000,
         startup.startup.flags = 0x100 | 0x1; startup.startup.show = 0
         startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = handles
         startup.attributes = C.cast(attribute_buffer, C.c_void_p)
-        minimal = {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR') if key in os.environ}
+        minimal = {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR', 'IG5_HOME') if key in os.environ}
         minimal.update({'TEMP': str(directory), 'TMP': str(directory),
                         'PATH': os.path.dirname(executable) + os.pathsep + os.path.join(os.environ.get('SYSTEMROOT', 'C:\\Windows'), 'System32')})
         if env:

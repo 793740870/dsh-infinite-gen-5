@@ -9,6 +9,7 @@ import { builtinModules, syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import vm from 'node:vm';
+import { publicDocument } from './fixtures/research_v2.mjs';
 
 function option(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -220,7 +221,7 @@ try {
   const agents = [];
   await context.plugin(Object.assign(inner => {
     for (const id of ['sdk-A', 'sdk-B']) {
-      const agent = { id, session: { append(type, data) { const event = { seq: commandEvents.length, type, data }; commandEvents.push(event); return event; } } };
+      const agent = { id, session: { header: { id, cwd: runRoot }, log: [], append(type, data) { const event = { seq: this.log.length, type, data }; this.log.push(event); commandEvents.push(event); return event; } } };
       agent.ctx = createScope(inner, agent).ctx; agents.push(agent);
     }
   }, { inject: ['tools', 'systemPrompt'] }));
@@ -232,10 +233,12 @@ try {
   const switchResult = await context.commands.execute(a, '/ig5 toolset full', [], new AbortController().signal);
   assert.equal(switchResult.result.kind, 'success');
   const schemas = context.tools.schemas(a);
-  assert.equal(schemas.length, 40); assert.equal(context.tools.schemas(b).length, 8); assert.equal(context.tools.schemas().length, 8);
+  assert.equal(schemas.length, 43); assert.equal(context.tools.schemas(b).length, 8); assert.equal(context.tools.schemas().length, 8);
   assert(schemas.every(schema => schema.name.startsWith('ig5_') && schema.parameters.type === 'object'));
   assert.equal(context.tools.get('ig5_crypto', b), undefined); assert(context.tools.get('ig5_crypto', a));
-  pass('Actual IG5 Core8/Full40 schemas through installed DSH registry; two agent scopes remain isolated');
+  pass('Actual IG5 Core8/Full43 schemas through installed DSH registry; two agent scopes remain isolated');
+  const knowledgeSchema = schemas.find(s => s.name === 'ig5_profile').parameters.properties.knowledge;
+  assert.deepEqual(knowledgeSchema.required, ['action']);
   const skills = (await context.skills.list({ scope: a })).filter(item => item.name.startsWith('ig5-'));
   assert.equal(skills.length, 8);
   for (const summary of skills) { const skill = await context.skills.get(summary.name, { scope: a }); assert(skill?.content?.length > 50); assert.equal(skill.invocation.modelInvocable, true); }
@@ -257,6 +260,58 @@ try {
   assert.equal(repaired.checkpoint.ig5dash.ver,2);
   pass('Actual projection service refolds old version1 cache and settles toolCallId/error/concurrent/replayed results once');
   const execute = (name, args = {}, agent = a) => context.tools.execute({ name, arguments: args, agent, signal: new AbortController().signal, callId: `sdk-${name}` });
+  const researchLookup = await execute('ig5_profile', { knowledge: { action: 'search', query: '混合布尔算术' } });
+  assert.equal(researchLookup.isError, false);
+  const researchRef = researchLookup.value.knowledge.items[0].ref;
+  assert.equal(researchRef.id, 'mba-synthesis');
+  const researchRead = await execute('ig5_profile', { knowledge: { action: 'read', ref: researchRef } });
+  assert.equal(researchRead.isError, false); assert.equal(researchRead.value.knowledge.semanticVerified, false);
+  assert.equal(researchRead.value.knowledge.executionAuthorized, false);
+  const originalDocuments = await execute('ig5_profile', { knowledge: { action: 'documents', query: 'MBA' } });
+  assert.equal(originalDocuments.isError, false); assert.equal(originalDocuments.value.knowledge.total, 0);
+  assert.equal((await execute('ig5_profile', { knowledge: { action: 'status' }, target: 'never-opened.exe' })).isError, true);
+  assert.equal((await execute('ig5_profile', { knowledge: { action: 'crawl' } })).isError, true);
+  pass('Actual DSH registry executes explicit research search/read with exact refs and rejects mixed or execution actions');
+  const {publishPublicKnowledgeV2}=await import(pathToFileURL(path.join(pluginRoot,'source/knowledge_publish_v2.js')).href);
+  const v2Published=publishPublicKnowledgeV2({projectRoot:path.join(runRoot,'projects'),expectedGeneration:'absent',upserts:[publicDocument('v2-sdk-fixture','SDK v2 original-note fixture')],withdrawals:[]});
+  const v2Lookup=await execute('ig5_profile',{knowledge:{action:'documents',query:'fixture'}});assert.equal(v2Lookup.isError,false);assert.equal(v2Lookup.value.knowledge.items[0].ref.id,'v2-sdk-fixture');
+  const v2Ref=v2Lookup.value.knowledge.items[0].ref,v2Read=await execute('ig5_profile',{knowledge:{action:'read',ref:v2Ref}});assert.equal(v2Read.isError,false);assert.equal(v2Read.value.knowledge.metadata.schema,'ig5-source-document-v2');assert.equal(v2Read.value.knowledge.body,'SDK v2 original-note fixture');assert.equal(v2Read.value.knowledge.executionAuthorized,false);
+  publishPublicKnowledgeV2({projectRoot:path.join(runRoot,'projects'),expectedGeneration:v2Published.generation,upserts:[],withdrawals:[{ref:v2Ref,reason:'SDK fixture withdrawal',replacementRef:null}]});
+  const v2History=await execute('ig5_profile',{knowledge:{action:'read',ref:v2Ref}});assert.equal(v2History.isError,false);assert.equal(v2History.value.knowledge.recordState,'withdrawn');
+  assert.equal((await execute('ig5_profile',{knowledge:{action:'read',ref:researchRef}})).isError,false);
+  pass('Actual DSH reads sharded v2 data and withdrawn history while preserving v1 references and original permissions');
+  const memoryOriginal = a.session.append('tool/result', { message: { toolCallId: 'memory-evidence', content: [{ type: 'text', text: 'counterexample guard=0xffffffffffffffff; conclusion remains unknown' }] } });
+  const memoryStatus = await execute('ig5_profile', { memory: { action: 'status' } });
+  assert.equal(memoryStatus.isError, false, JSON.stringify(memoryStatus));
+  assert.equal(memoryStatus.value.memory.automaticRestoreRegistered, true);
+  const found = await execute('ig5_profile', { memory: { action: 'search', query: 'counterexample' } });
+  assert.equal(found.isError, false); const memoryRef = found.value.memory.hits[0].ref;
+  assert.equal(found.value.memory.recovery.automaticCheckpointSaved, false);
+  assert.equal(found.value.memory.recovery.read[0].memory.ref.sha256, memoryRef.sha256);
+  assert.match(found.value.memory.recovery.checkpointDraft.text, /Caller-unverified/);
+  const readMemory = await execute('ig5_profile', { memory: { action: 'read', ref: memoryRef } });
+  assert.equal(readMemory.isError, false); assert.deepEqual(JSON.parse(readMemory.value.memory.text), memoryOriginal);
+  const foreignMemory = await execute('ig5_profile', { memory: { action: 'read', ref: memoryRef } }, b);
+  assert.equal(foreignMemory.isError, true);
+  a.session.append('compaction/summary', { summary: [{ type: 'text', text: 'Details omitted' }], shadowedSeqs: [memoryOriginal.seq] });
+  const restored = await execute('ig5_profile', { memory: { action: 'restore' } });
+  assert.equal(restored.isError, false); assert.equal(restored.value.memory.summaries.length, 1);
+  const expanded = await execute('ig5_profile', { memory: { action: 'expand', ref: { kind: 'summary', id: restored.value.memory.summaries[0].id, sha256: restored.value.memory.summaries[0].sha256 } } });
+  assert.equal(expanded.isError, false); assert.deepEqual(expanded.value.memory.refs, [memoryRef]);
+  const promptA = await context.systemPrompt.assemble({ scope: a });
+  const promptGlobal = await context.systemPrompt.assemble({});
+  assert(promptA.contexts.some(p => p.name === 'ig5-lcm-history' && p.text.includes('search/read/expand')));
+  assert(!promptGlobal.contexts.some(p => p.name === 'ig5-lcm-history'));
+  assert.equal(context.tools.schemas(a).length, 43);
+  pass('Actual installed DSH registry executes LCM capture/search/read/restore/expand, rejects cross-session refs and assembles scoped recovery context without global injection');
+  const catalog = await execute('ig5_profile', { capabilities: true });
+  assert.equal(catalog.isError, false);
+  assert.equal(catalog.value.capabilities.nativeProbePerformed, false);
+  assert(catalog.value.capabilities.entries.some(e => e.operation === 'function-context' && e.provider === 'ghidra'));
+  const mixedCatalog = await execute('ig5_profile', { capabilities: true, toolset: 'core' });
+  assert.equal(mixedCatalog.isError, true);
+  assert.equal(context.tools.schemas(a).length, 43);
+  pass('Actual DSH registry validates read-only capability schema/output and rejects mixed toolset mutation');
   for (const name of ['ig5_status', 'ig5_profile']) {
     const result = await execute(name);
     if (result.isError) {
@@ -271,14 +326,14 @@ try {
   const recoveryCaseBytes = fs.readFileSync(path.join(pluginRoot, 'scripts/fixtures/vm_recovery_case.example.json'));
   fs.writeFileSync(recoveryCasePath, recoveryCaseBytes);
   const recoveryCaseSha256 = createHash('sha256').update(recoveryCaseBytes).digest('hex');
-  const recoveryResult = await execute('ig5_profile', { recovery: { case_ref: { path: recoveryCasePath, sha256: recoveryCaseSha256 } } });
+  const recoveryResult = await execute('ig5_recovery', { recovery: { case_ref: { path: recoveryCasePath, sha256: recoveryCaseSha256 } } });
   assert.equal(recoveryResult.isError, false, JSON.stringify(recoveryResult));
   const recoveryView = recoveryResult.value.recovery;
   assert.equal(recoveryView.completionAssessment.businessAccepted, false);
-  assert.equal(recoveryView.integration.dshPlanningEntry, 'ig5_profile.recovery');
+  assert.equal(recoveryView.integration.dshPlanningEntry, 'ig5_recovery.recovery');
   assert.equal(createHash('sha256').update(fs.readFileSync(recoveryView.reportPath)).digest('hex'), recoveryView.reportSha256);
   assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
-  const changedRecoveryCase = await execute('ig5_profile', { recovery: { case_ref: { path: recoveryCasePath, sha256: '0'.repeat(64) } } });
+  const changedRecoveryCase = await execute('ig5_recovery', { recovery: { case_ref: { path: recoveryCasePath, sha256: '0'.repeat(64) } } });
   assert.equal(changedRecoveryCase.isError, true);
   assert.match(JSON.stringify(changedRecoveryCase), /differ from the supplied SHA-256/);
   pass('Actual profile recovery schema/output/read-only report path validates through DSH registry; changed case rejected before referenced reads');
@@ -289,7 +344,7 @@ try {
     const fixture = observationWindow({ cpuid: true }), input = observationStore.put(fixture.data);
     const record = observationStore.save({ kind: 'debug-trace', action: 'record', result: { ...fixture.summary, input } });
     const observations = { recordings: [{ id: record.id, sha256: observationStore.metadata(record.id).result.recordSha256 }], target_sha256: observationTarget, limit: 1 };
-    const response = await execute('ig5_profile', { recovery: { observations } });
+    const response = await execute('ig5_recovery', { recovery: { observations } });
     assert.equal(response.isError, false, JSON.stringify(response));
     const view = response.value.observations;
     assert.equal(view.totals.instructions, 4); assert.equal(view.totals.stopGroups, 2);
@@ -300,18 +355,78 @@ try {
       assert.equal((await execute('ig5_profile', args)).isError, true);
     assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
     pass('Actual profile observations schema/worker/report passes DSH registry; mixed modes and wrong SHA rejected without native execution');
+    const phaseResponse = await execute('ig5_recovery', { recovery: { observations: { ...observations, phase_model: true } } });
+    assert.equal(phaseResponse.isError, false, JSON.stringify(phaseResponse));
+    assert.equal(phaseResponse.value.observations.phaseModel.phaseVerified, false);
+    assert.equal(phaseResponse.value.observations.phaseModel.groups[0].versions[1].version.binding.beforeStateAvailable, false);
+    assert.equal(phaseResponse.value.observations.phaseModel.codeEpochs.globalCodeEpochKnown, false);
+    assert.equal((await execute('ig5_recovery', { recovery: { observations: { ...observations, phase_model: 'true' } } })).isError, true);
+    assert.equal((await execute('ig5_recovery', { recovery: { observations: { ...observations, phase_model: true, dispatch: 'verified' } } })).isError, true);
+    assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
+    pass('Actual DSH opt-in phase model binds CPUID byte observations and rejects caller phase promotion without native dispatch');
+    const { buildPhaseContextCase } = await import(pathToFileURL(path.join(pluginRoot, 'scripts/fixtures/vm_phase_context_cases.mjs')).href);
+    const phaseArtifacts = new AnalysisArtifacts(path.join(runRoot, 'artifacts', 'analysis-data'));
+    try {
+      const built = await buildPhaseContextCase({ artifacts: phaseArtifacts }, { artifactDir: path.join(runRoot, 'artifacts') });
+      const annotated = await execute('ig5_recovery', { recovery: { observations: { ...built.request, offset: 99, limit: 5 } } });
+      assert.equal(annotated.isError, false, JSON.stringify(annotated));
+      const annotation = annotated.value.observations.phaseModel.contextAnnotation;
+      assert.equal(annotation.audit.status, 'pass'); assert.equal(annotation.matchedGroups, 16);
+      assert.equal(annotation.totalSegments, 16); assert.equal(annotation.segmentsPreviewComplete, false);
+      assert.equal(annotated.value.observations.phaseModel.groups[1].contextPhase.kind, 'fetch-dispatch-candidate');
+      assert.equal(annotation.phaseClassificationProved, false);
+      assert.equal((await execute('ig5_recovery', { recovery: { observations: { ...built.request, phase_model: false } } })).isError, true);
+      assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
+      const declared=await execute('ig5_recovery',{recovery:{declare_contract:{contract:{schema:'ig5-function-contract-v1',targetSha256:built.request.target_sha256,
+        entryRva:'0x0',normalReturn:'native-ret',input:{register:'rcx',bits:8,minimum:'0x0',maximum:'0xff'},
+        outputs:{returnRegister:'rax',memory:[]},environment:'single-threaded-no-external-calls',exclusions:['Synthetic recording format only; no native execution']}}}});
+      assert.equal(declared.isError,false,JSON.stringify(declared));
+      const contractRef={id:declared.value.declare_contract.reportId,sha256:declared.value.declare_contract.reportSha256},contextRef={id:built.model.reportId,sha256:built.model.reportSha256};
+      const comparison=await execute('ig5_recovery',{recovery:{role_compare:{context_refs:[contextRef],contract_ref:contractRef}}});
+      assert.equal(comparison.isError,false,JSON.stringify(comparison));
+      const validated=await execute('ig5_recovery',{recovery:{role_validate:{comparison_ref:{id:comparison.value.role_compare.reportId,sha256:comparison.value.role_compare.reportSha256},
+        recording_bindings:[{context_ref:contextRef,recordings:[built.debugRef]}]}}});
+      assert.equal(validated.isError,false,JSON.stringify(validated));assert.equal(validated.value.role_validate.independence.rawCaptureRevalidated,true);
+      assert.equal(validated.value.role_validate.independence.distinctObservedRuns,1);assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+      pass('Actual DSH role-validation schema rebinds synthetic raw context sources without promoting single-run evidence or executing targets');
+    } finally { await phaseArtifacts.dispose(); }
+    pass('Actual DSH phase context rebinds candidate cycles to committed raw groups, bounds previews and preserves unknown VM phases');
+    {
+      const { branchMemoryCode, bytecodeContract } = await import(pathToFileURL(path.join(pluginRoot,'scripts/fixtures/vm_bytecode_cases.mjs')).href);
+      const inputPath=path.join(runRoot,'owned-branch-memory.bin'),sha=createHash('sha256').update(branchMemoryCode).digest('hex');fs.writeFileSync(inputPath,branchMemoryCode);
+      const declared=await execute('ig5_recovery',{recovery:{declare_contract:{contract:bytecodeContract(sha)}}});
+      assert.equal(declared.isError,false,JSON.stringify(declared));
+      const contractRef={id:declared.value.declare_contract.reportId,sha256:declared.value.declare_contract.reportSha256};
+      const program=await execute('ig5_recovery',{recovery:{program:{image_ref:{path:inputPath,sha256:sha},contract_ref:contractRef}}});
+      assert.equal(program.isError,false,JSON.stringify(program));
+      const programRef={id:program.value.program.reportId,sha256:program.value.program.reportSha256};
+      const verified=await execute('ig5_recovery',{recovery:{function_check:{program_ref:programRef}}});
+      assert.equal(verified.isError,false,JSON.stringify(verified));assert.equal(verified.value.function_check.finiteTesting.cases,256);
+      assert.equal(verified.value.function_check.modelContractAccepted,true);assert.equal(verified.value.function_check.businessAccepted,false);
+      assert.equal((await execute('ig5_recovery',{recovery:{function_check:{program_ref:programRef,oracle:'caller-code'}}})).isError,true);
+      assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+      pass('Actual DSH schema/dispatcher executes the fixed finite VM model oracle and rejects caller verifier overrides without native dispatch');
+    }
+    {
+      const {smallVm}=await import(pathToFileURL(path.join(pluginRoot,'scripts/fixtures/vm_instance_cases.mjs')).href);
+      const bytes=Buffer.from(JSON.stringify(smallVm({haltOnly:true}))),inputPath=path.join(runRoot,'declared-small-vm.json');fs.writeFileSync(inputPath,bytes);
+      const compared=await execute('ig5_recovery',{recovery:{instances:{source_refs:[{path:inputPath,sha256:createHash('sha256').update(bytes).digest('hex')}]}}});assert.equal(compared.isError,false,JSON.stringify(compared));
+      const checked=await execute('ig5_recovery',{recovery:{instance_check:{comparison_ref:compared.value.instances.reportRef}}});assert.equal(checked.isError,false,JSON.stringify(checked));assert.equal(checked.value.instance_check.checks[0].initialResultSensitivity,true);assert.equal(checked.value.instance_check.businessAccepted,false);
+      assert.equal((await execute('ig5_recovery',{recovery:{instance_check:{comparison_ref:compared.value.instances.reportRef,oracle:'arbitrary'}}})).isError,true);assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+      pass('Actual DSH schema and original data worker check explicit small-VM instances and HALT initial-result distinction without native execution');
+    }
     const { storeEventCase } = await import(pathToFileURL(path.join(pluginRoot, 'scripts/fixtures/vm_store_event_cases.mjs')).href);
     const { saveDebugTrace } = await import(pathToFileURL(path.join(pluginRoot, 'source/debug_trace.js')).href);
     const storeFixture = storeEventCase();
     const stored = await saveDebugTrace({ artifactDir: path.join(runRoot, 'artifacts') }, { target: path.join(runRoot, 'synthetic-not-executed.exe'), sha256: observationTarget }, storeFixture.native, { record_events: true });
-    const storeResponse = await execute('ig5_profile', { recovery: { observations: { recordings: [{ id: stored.traceReportId, sha256: stored.traceReportSha256 }], target_sha256: observationTarget } } });
+    const storeResponse = await execute('ig5_recovery', { recovery: { observations: { recordings: [{ id: stored.traceReportId, sha256: stored.traceReportSha256 }], target_sha256: observationTarget } } });
     assert.equal(storeResponse.isError, false, JSON.stringify(storeResponse));
     assert.equal(storeResponse.value.observations.stopGroups[0].memoryWrites.stores[0].afterHex, '8877665544332211');
     assert.equal(storeResponse.value.observations.stopGroups[0].memoryWrites.actualWriteCausalityProved, false);
     assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
     pass('Actual DSH schema/output preserves optional source-bound store events and unknown CPU/write proof');
   } finally { await observationStore.dispose(); }
-  const flowSchema=schemas.find(item=>item.name==='ig5_profile').parameters.properties.recovery.properties.flow;
+  const flowSchema=schemas.find(item=>item.name==='ig5_recovery').parameters.properties.recovery.properties.flow;
   assert.equal(flowSchema.additionalProperties,false);assert.deepEqual(flowSchema.required,['roles_ref','target']);
   assert.equal(flowSchema.properties.semantic_check.type,'boolean');
   for(const args of [
@@ -319,10 +434,10 @@ try {
     {recovery:{flow:{roles_ref:{id:'invalid',sha256:'a'.repeat(64)},target:path.join(runRoot,'never-opened.exe'),projection_decoder:'native'}}},
     {recovery:{flow:{roles_ref:{id:'invalid',sha256:'a'.repeat(64)},target:path.join(runRoot,'never-opened.exe'),semantic_check:true}}},
     {recovery:{flow:{roles_ref:{id:'invalid',sha256:'a'.repeat(64)},target:path.join(runRoot,'never-opened.exe'),semantic_check:'true'}}},
-  ])assert.equal((await execute('ig5_profile',args)).isError,true);
+  ])assert.equal((await execute('ig5_recovery',args)).isError,true);
   assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
   pass('Actual DSH flow schema and invalid-reference/decoder-override refusals preserve no native dispatch');
-  const recurrenceSchema=schemas.find(item=>item.name==='ig5_profile').parameters.properties.recovery.properties.recurrences;
+  const recurrenceSchema=schemas.find(item=>item.name==='ig5_recovery').parameters.properties.recovery.properties.recurrences;
   assert.equal(recurrenceSchema.additionalProperties,false);assert.deepEqual(recurrenceSchema.required,['flow_ref']);
   assert.deepEqual(recurrenceSchema.properties.sample_strategy.enum,['first4-last4','distinct-source-targets']);
   assert.equal(recurrenceSchema.properties.pair_offset.maximum,255);
@@ -330,23 +445,117 @@ try {
     {recovery:{recurrences:{flow_ref:{id:'invalid',sha256:'a'.repeat(64)}}}},
     {recovery:{recurrences:{flow_ref:{id:'11111111-1111-1111-1111-111111111111',sha256:'a'.repeat(64)},target:path.join(runRoot,'never-opened.exe')}}},
     {recovery:{recurrences:{flow_ref:{id:'invalid',sha256:'a'.repeat(64)}},flow:{}}},
-  ])assert.equal((await execute('ig5_profile',args)).isError,true);
+  ])assert.equal((await execute('ig5_recovery',args)).isError,true);
   assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
   pass('Actual DSH recurrence schema rejects uncommitted references, caller target and mixed modes without native dispatch');
+  const researchSchema = schemas.find(item => item.name === 'ig5_workspace').parameters.properties.workspace.properties.research;
+  assert.equal(researchSchema.additionalProperties, false);
+  assert(researchSchema.properties.operation.enum.includes('revise-hypothesis'));
+  assert.equal(researchSchema.properties.value.oneOf.length, 4);
+  assert(researchSchema.properties.value.oneOf.every(s => s.additionalProperties === false));
+  const researchRequest = { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'research-update', id: randomUUID(), research: {
+    operation: 'initialize', expected_research_revision: 0, expected_task_revision: 0, scope_digest: 'a'.repeat(64),
+    value: { question: 'Bounded question', inputDomain: 'Listed inputs', returns: 'Recorded return', outputs: 'None', sideEffects: 'Unknown', environment: 'Offline', exclusions: 'Unobserved paths' },
+  } } };
+  const validResearch = await execute('ig5_workspace', researchRequest);
+  assert.equal(validResearch.isError, true); assert.match(JSON.stringify(validResearch), /workspace requires an opened static target/);
+  const invalidResearch = structuredClone(researchRequest); invalidResearch.workspace.research.value.verified = true;
+  const invalidResearchResult = await execute('ig5_workspace', invalidResearch);
+  assert.equal(invalidResearchResult.isError, true);
+  assert.doesNotMatch(JSON.stringify(invalidResearchResult), /workspace requires an opened static target/, 'Unknown nested verification field must fail runtime envelope before target dispatch');
+  assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
+  pass('Actual DSH registers the bounded research schema; runtime envelope rejects caller verification before target dispatch; Core8/Full43 unchanged');
+  const caseSchema=schemas.find(item=>item.name==='ig5_workspace').parameters.properties.workspace;
+  for(const action of ['case-status','case-index','case-search','case-read','method-registry','method-applicability','experiment-shadow','candidate-prepare','candidate-verify','candidate-read','candidate-simplify','cff-overlay','cff-read','cff-state'])assert(caseSchema.properties.action.enum.includes(action));
+  const caseRead=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'case-status',id:randomUUID()}});
+  assert.equal(caseRead.isError,true);assert.match(JSON.stringify(caseRead),/opened static target/);
+  for(const extra of [{projectId:'forged'},{scope:{kind:'private'}},{runId:'forged'},{execute:true}]){
+    const denied=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'case-search',id:randomUUID(),query:'known result',...extra}});
+    assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/Invalid private case index fields/);
+  }
+  assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+  pass('Actual DSH private-case schema rejects forged scope/run/execution before static-target lookup; no new gate or worker');
+  for(const action of ['method-registry','method-applicability']){
+    const denied=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action,id:randomUUID(),...(action==='method-applicability'?{method_id:'address-space-check'}:{})}});
+    assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/opened static target/);
+  }
+  const forgedMethod=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'method-applicability',id:randomUUID(),method_id:'address-space-check',predicates:{'static-observation':true}}});
+  assert.equal(forgedMethod.isError,true);assert.match(JSON.stringify(forgedMethod),/Invalid fixed method query fields/);
+  assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+  pass('Actual DSH method schema rejects caller predicates and requires an opened static target without native execution');
+  for(const mode of ['off','shadow']){
+    const denied=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'experiment-shadow',id:randomUUID(),mode}});
+    assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/opened static target/);
+  }
+  for(const extra of [{mode:'assist'},{mode:'shadow',existingToolRequest:{}},{mode:'shadow',budget:40}]){
+    const denied=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'experiment-shadow',id:randomUUID(),...extra}});
+    assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/Invalid experiment shadow fields|Only off.shadow/);
+  }
+  assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+  pass('Actual DSH shadow schema rejects assist and executable proposal injection without starting a worker');
+  const candidateRef={id:randomUUID(),sha256:'a'.repeat(64)};
+  const candidateAST={nodes:[{id:0,op:'const',bits:8,args:[],value:'0x0'}],root:0};
+  for(const workspace of [{action:'candidate-prepare',source_ref:candidateRef,root_node:0},{action:'candidate-verify',candidate_ref:candidateRef,candidate_ast:candidateAST},{action:'candidate-read',report_ref:candidateRef}]){
+    const result=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{id:randomUUID(),...workspace}});assert.equal(result.isError,true);assert.match(JSON.stringify(result),/opened static target/);
+  }
+  const forgedCandidate=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'candidate-verify',id:randomUUID(),candidate_ref:candidateRef,candidate_ast:candidateAST,verified:true}});
+  assert.equal(forgedCandidate.isError,true);assert.match(JSON.stringify(forgedCandidate),/Invalid candidate contract fields/);
+  assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+  pass('Actual DSH candidate schema requires opened static target and rejects caller verified authority without native dispatch');
+  const simplify=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'candidate-simplify',id:randomUUID(),candidate_ref:candidateRef}});
+  assert.equal(simplify.isError,true);assert.match(JSON.stringify(simplify),/opened static target/);
+  for(const extra of [{provider:'external'},{candidate_ast:candidateAST},{verified:true},{timeoutMs:999999},{path:'C:/untrusted'}]){
+    const denied=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'candidate-simplify',id:randomUUID(),candidate_ref:candidateRef,...extra}});assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/Invalid candidate contract fields/);
+  }
+  assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+  pass('Actual DSH fixed single-provider schema rejects alternate provider/code/path/budget and grants no new authority');
+  for(const workspace of [{action:'cff-overlay',snapshot_id:randomUUID(),verification_ref:candidateRef},{action:'cff-read',report_ref:candidateRef}]){
+    const result=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{id:randomUUID(),...workspace}});assert.equal(result.isError,true);assert.match(JSON.stringify(result),/opened static target/);
+  }
+  for(const extra of [{graph:{}},{state_variable:'rax'},{verified:true},{execute:true},{budget:999999}]){
+    const result=await execute('ig5_workspace',{target:path.join(runRoot,'never-opened.exe'),workspace:{action:'cff-overlay',id:randomUUID(),snapshot_id:randomUUID(),...extra}});assert.equal(result.isError,true);assert.match(JSON.stringify(result),/Invalid CFF read-only fields/);
+  }
+  assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
+  pass('Actual DSH CFF schema requires current opened target, rejects graph/state/proof/budget injection and preserves original approvals');
+  const verificationSchema = schemas.find(item => item.name === 'ig5_workspace').parameters.properties.workspace.properties.verification;
+  assert.equal(verificationSchema.additionalProperties, false);
+  assert.equal(verificationSchema.properties.expected_research_revision.type, 'integer');
+  const verifyInput = { expected_research_revision: 0, expected_task_revision: 0, scope_digest: 'a'.repeat(64), evidence_id: randomUUID(), obligation_id: randomUUID() };
+  const validVerification = await execute('ig5_workspace', { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'research-verify', id: randomUUID(), verification: verifyInput } });
+  assert.equal(validVerification.isError, true); assert.match(JSON.stringify(validVerification), /opened static target/);
+  for (const extra of [{ command: 'arbitrary' }, { verifier_script: 'arbitrary.py' }, { passed: true }]) {
+    const rejected = await execute('ig5_workspace', { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'research-verify', id: randomUUID(), verification: { ...verifyInput, ...extra } } });
+    assert.equal(rejected.isError, true); assert.match(JSON.stringify(rejected), /Fixed verification requires/);
+  }
+  assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
+  pass('Actual DSH fixed verifier entry rejects command/script/verdict overrides before target dispatch and preserves the original execution gates');
+  assert(schemas.find(item => item.name === 'ig5_workspace').parameters.properties.workspace.properties.action.enum.includes('plan'));
+  const planOverride = await execute('ig5_workspace', { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'plan', id: randomUUID(), auto_execute: true } });
+  assert.equal(planOverride.isError, true); assert.match(JSON.stringify(planOverride), /workspace field is not valid/);
+  const planRead = await execute('ig5_workspace', { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'plan', id: randomUUID() } });
+  assert.equal(planRead.isError, true); assert.match(JSON.stringify(planRead), /opened static target/);
+  assert.equal(approvals.length, 0); assert.deepEqual(blockedProcesses, []);
+  pass('Actual DSH plan entry rejects automatic execution overrides before dispatch; it remains read-only under Core8/Full43');
+  assert(schemas.find(item => item.name === 'ig5_workspace').parameters.properties.workspace.properties.action.enum.includes('resume'));
+  const resumeOverride = await execute('ig5_workspace', { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'resume', id: randomUUID(), auto_execute: true } });
+  assert.equal(resumeOverride.isError, true); assert.match(JSON.stringify(resumeOverride), /workspace field is not valid/);
+  const resumeRead = await execute('ig5_workspace', { target: path.join(runRoot, 'never-opened.exe'), workspace: { action: 'resume', id: randomUUID() } });
+  assert.equal(resumeRead.isError, true); assert.match(JSON.stringify(resumeRead), /opened static target/);
+  pass('Actual DSH resume entry preserves explicit target checks and refuses automatic execution');
   for(const args of [
     {recovery:{recurrences:{flow_ref:{id:'invalid',sha256:'a'.repeat(64)},sample_strategy:'invented'}}},
     {recovery:{recurrences:{flow_ref:{id:'invalid',sha256:'a'.repeat(64)},pair_offset:0}}},
     {recovery:{recurrences:{flow_ref:{id:'invalid',sha256:'a'.repeat(64)},sample_strategy:'distinct-source-targets',pair_offset:256}}},
-  ])assert.equal((await execute('ig5_profile',args)).isError,true);
+  ])assert.equal((await execute('ig5_recovery',args)).isError,true);
   assert.deepEqual(blockedProcesses,[]);assert.equal(approvals.length,0);
   pass('Actual DSH diverse-pair schema validates bounded strategy/page selection before any native dispatch');
-  const handlerSchema=schemas.find(item=>item.name==='ig5_profile').parameters.properties.recovery.properties.handlers;
+  const handlerSchema=schemas.find(item=>item.name==='ig5_recovery').parameters.properties.recovery.properties.handlers;
   assert.equal(handlerSchema.additionalProperties,false);assert.deepEqual(handlerSchema.required,['recurrences_ref','target']);
   for(const args of [
     {recovery:{handlers:{recurrences_ref:{id:'invalid',sha256:'a'.repeat(64)},target:path.join(runRoot,'never-opened.exe')}}},
     {recovery:{handlers:{recurrences_ref:{id:'invalid',sha256:'a'.repeat(64)},target:path.join(runRoot,'never-opened.exe'),projection_path:['0x1234']}}},
     {recovery:{handlers:{},recurrences:{}}},
-  ])assert.equal((await execute('ig5_profile',args)).isError,true);
+  ])assert.equal((await execute('ig5_recovery',args)).isError,true);
   assert.equal(approvals.length,0);assert.deepEqual(blockedProcesses,[]);
   pass('Actual DSH handler schema rejects uncommitted sources, caller addresses and mixed modes before native dispatch');
   const status = await context.commands.execute(a, '/ig5 status', [], new AbortController().signal);
@@ -401,7 +610,7 @@ try {
   pass('Cancelled, unavailable, unknown, throwing, missing-agent and missing-service approvals fail closed; confirmed approval reaches the inert body');
   assert.equal((await context.commands.execute(b, '/ig5 toolset full', [], new AbortController().signal)).result.kind, 'success');
   assert.equal((await context.commands.execute(a, '/ig5 toolset core', [], new AbortController().signal)).result.kind, 'success');
-  assert.equal(context.tools.schemas(a).length, 8); assert.equal(context.tools.schemas(b).length, 40);
+  assert.equal(context.tools.schemas(a).length, 8); assert.equal(context.tools.schemas(b).length, 43);
   pass('Core/Full command changes remain independent after real policy denials');
   // Actual installed tool schema/dispatcher, with controlled session lineage.
   // Native subagent lifecycle is tested separately in the live DSH GUI.
@@ -418,7 +627,39 @@ try {
   assert.equal(ledger.isError, false); assert.equal(ledger.value.collaboration.used, 2);
   assert.deepEqual(ledger.value.collaboration.byAgent, { 'sdk-A': 1, 'sdk-B': 1 });
   pass('Actual installed DSH schema/dispatcher enforces shared parent-child IG5 budget and preserves exempt status after exhaustion');
+  const guardDataset=path.join(runRoot,'eval-guard-dataset.json');
+  fs.writeFileSync(guardDataset,JSON.stringify({schema:'ig5-eval-pilot-evidence-v1',task:{sentinel:'HOST_EVIDENCE_SENTINEL'},brief:{},historical:{},current:{},catalog:{}}));
+  const guardOwner=context.plugin(await import(pathToFileURL(path.join(pluginRoot,'scripts/evals/model_guard.mjs')).href),
+    {dataset:guardDataset,variant:'baseline',log:path.join(runRoot,'eval-guard-tools.jsonl')});
+  await guardOwner;
+  try {
+    const visible=await execute('ig5_eval',{action:'task'});
+    assert.equal(visible.isError,false);assert.equal(visible.value.sentinel,'HOST_EVIDENCE_SENTINEL');
+    assert(visible.content.some(b=>b.type==='text'&&b.text.includes('HOST_EVIDENCE_SENTINEL')));
+    assert.equal((await execute('ig5_eval',{action:'task',path:'oracle.mjs'})).isError,true);
+    assert.equal((await execute('ig5_status')).isError,true);
+  } finally {await guardOwner.dispose();}
+  pass('Actual DSH renders model-replay evidence and rejects extra path fields and all non-allowlisted tool dispatch');
+  const { memoryResumeFixture } = await import(pathToFileURL(path.join(pluginRoot, 'scripts/evals/memory_resume_fixture.mjs')).href);
+  {
+    const fusionGuard=context.plugin(await import(pathToFileURL(path.join(pluginRoot,'scripts/evals/fusion/model_guard.mjs')).href),{taskId:'owned-bv-add-zero',group:'A',log:path.join(runRoot,'fusion-eval-tools.jsonl'),runRoot:path.join(runRoot,'fusion-eval')});await fusionGuard;
+    try{const assembled=await context.systemPrompt.assemble({scope:a});assert.deepEqual(assembled.tools.map(t=>t.name),['ig5_fusion_eval']);assert.equal(assembled.sections.length,1);assert.equal(assembled.sections[0].name,'ig5-fusion-fixed-study');const task=await execute('ig5_fusion_eval',{action:'task'});assert.equal(task.isError,false);assert.equal(task.value.payload.id,'owned-bv-add-zero');assert(/^[a-f0-9]{64}$/.test(task.value.sourceSha256));assert.equal((await execute('ig5_fusion_eval',{action:'task',path:'private-judge'})).isError,true);assert.equal((await execute('ig5_fusion_eval',{action:'verify'})).isError,true);assert.equal((await execute('ig5_status')).isError,true);}finally{await fusionGuard.dispose();}
+    pass('Actual Harness A-E evaluation boundary renders source hashes, withholds higher-group actions and denies file/tool/extra-field access');
+  }
+  const resumeDataset = path.join(runRoot, 'resume-dataset.json'); fs.writeFileSync(resumeDataset, JSON.stringify(memoryResumeFixture()));
+  const resumeGuard = context.plugin(await import(pathToFileURL(path.join(pluginRoot, 'scripts/evals/memory_resume_guard.mjs')).href),
+    { dataset: resumeDataset, variant: 'brief-lcm', log: path.join(runRoot, 'resume-tools.jsonl'), runRoot: path.join(runRoot, 'resume-archive') });
+  await resumeGuard;
+  try {
+    const navigation = await execute('ig5_memory_eval', { action: 'resume' });
+    assert.equal(navigation.isError, false); assert.equal(navigation.value.gaps.length, 3);
+    assert.equal(navigation.value.executionAuthorized, false);
+    assert.equal((await execute('ig5_memory_eval', { action: 'resume', path: 'foreign' })).isError, true);
+    assert.equal((await execute('ig5_status')).isError, true);
+  } finally { await resumeGuard.dispose(); }
+  pass('Actual DSH loads the replay archive after compaction/reopen and enforces the memory-only evaluation boundary');
   await owner.dispose(); owner = null;
+  assert(!(await context.systemPrompt.assemble({ scope: a })).contexts.some(p => p.name === 'ig5-lcm-history'));
   assert.equal(context.tools.schemas(a).length, 0); assert.equal(context.tools.schemas(b).length, 0);
   assert.equal((await context.skills.list({ scope: a })).filter(item => item.name.startsWith('ig5-')).length, 0);
   assert.equal(context.commands.find(a, 'ig5'), undefined);

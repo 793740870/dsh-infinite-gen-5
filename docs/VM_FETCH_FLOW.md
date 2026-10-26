@@ -2,7 +2,7 @@
 
 Register-source CMOV can pass body projection only through the complete byte-bound dead-destination-frame exception documented in [STATE_PROJECTION](STATE_PROJECTION.md). It preserves flags and all raw provenance. Live conditional results, memory-source forms and RIP-relative data remain outside this exception. A successfully projected body can still be partial when saved status is unknown; no recorded flag value is injected to make it pass.
 
-`ig5_profile` has a separate read-only recovery mode:
+`ig5_recovery` has a separate read-only recovery mode:
 
 ```json
 {"recovery":{"flow":{"roles_ref":{"id":"ROLE_REPORT_UUID","sha256":"EXACT_ROLE_REPORT_SHA"},"target":"C:/explicit/existing/same-sha-target.exe"}}}
@@ -48,7 +48,7 @@ Only selected paths receive ordinary final-state/ordered-STORE checks; a first f
 
 ## Recorded handler bodies
 
-`ig5_profile` also accepts a separate `recovery.handlers` object with `recurrences_ref:{id,sha256}`, an explicit existing same-SHA raw PE `target`, and optional original `max_instructions`. No caller addresses, opcode labels, code, proofs or opaque values are accepted. The host rechecks the committed recurrence/flow/full/prefix/window reports, reloads every original recording and recomputes the recurrence before selecting bodies automatically. Each selected dispatch occurrence extends from its observed target through the next exact fetch head. The next fetch may be a partial recorded suffix; changed/coalesced heads, missing states, repeated PCs or absent boundaries remain unverified.
+`ig5_recovery` also accepts a separate `recovery.handlers` object with `recurrences_ref:{id,sha256}`, an explicit existing same-SHA raw PE `target`, and optional original `max_instructions`. No caller addresses, opcode labels, code, proofs or opaque values are accepted. The host rechecks the committed recurrence/flow/full/prefix/window reports, reloads every original recording and recomputes the recurrence before selecting bodies automatically. Each selected dispatch occurrence extends from its observed target through the next exact fetch head. The next fetch may be a partial recorded suffix; changed/coalesced heads, missing states, repeated PCs or absent boundaries remain unverified.
 
 At most eight bodies retain 128 groups and 256 KiB each. Unique executable raw-byte mappings and a fixed immutable PE snapshot precede pinned disassembly and Java opaque-status full-state projection. Distinct decoding sites and projected instructions together retain the original 128-site / 1024 logical budget, original two owned slots, 2 GiB / 50 s single-child Jobs, same-nonce ACK plus actual root exit, and 60 s overall deadline. Pure selection/assessment workers retain 64 MiB / 15 s and queue four. No target is executed, database opened/modified or blocked component retried.
 

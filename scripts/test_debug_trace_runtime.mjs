@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { apply } from '../index.js';
 import { buildPE64Fixture } from './fixtures/pe64.mjs';
 
-const evidence = process.env.IG5_DYNAMIC_EVIDENCE || 'C:/Users/Administrator/.dsh/ig5/artifacts/dynamic-trace-20261014';
+const evidence = process.env.IG5_DYNAMIC_EVIDENCE || 'C:/Users/IG5User/.dsh/ig5/artifacts/dynamic-trace-20261014';
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ig5-dynamic-trace-'));
 fs.mkdirSync(evidence, { recursive: true });
 const target = path.join(scratch, '五代自产加法.exe'), fixture = buildPE64Fixture();
@@ -49,7 +49,7 @@ const call = async (name, args) => {
 };
 const dbg = (op, args = {}) => call('ig5_dbg', { backend: 'x64dbg', op, timeout: 30, ...args });
 try {
-  assert.equal(definitions.size, 40);
+  assert.equal(definitions.size, 43);
   await call('ig5_open', { path: target, background: false });
   let dispatched = false;
   const gate = await hooks.get('tools/pre-execute')({ name: 'ig5_dbg', arguments: { target, op: 'trace', record_trace: true } }, () => { dispatched = true; });

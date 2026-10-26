@@ -7,8 +7,8 @@ import { createHash } from 'node:crypto';
 import { apply } from '../index.js';
 
 const root = path.resolve(import.meta.dirname, '..');
-const artifacts = process.env.IG5_RECOVERY_EVIDENCE || 'C:/Users/Administrator/.dsh/ig5/artifacts/vmp-recovery-20261014';
-const samples = process.env.IG5_VMP_SAMPLES || 'C:/Users/Administrator/.dsh/ig5/artifacts/vmp-research-20261014/samples';
+const artifacts = process.env.IG5_RECOVERY_EVIDENCE || 'C:/Users/IG5User/.dsh/ig5/artifacts/vmp-recovery-20261014';
+const samples = process.env.IG5_VMP_SAMPLES || 'C:/Users/IG5User/.dsh/ig5/artifacts/vmp-research-20261014/samples';
 const samplePins = JSON.parse(fs.readFileSync(path.join(root, 'scripts/fixtures/vmp_samples.json'), 'utf8')).samples;
 const expected = {
   'sample2.vmp.trace': '735c076fdaf56cbdd6b80e0a66d88c76479f258faaf8bdaff1bec7662a63f443',
@@ -34,7 +34,7 @@ const ctx = {
   effect(callback) { const remove = callback(); if (typeof remove === 'function') effects.push(remove); },
 };
 apply(ctx, { toolset: 'full', reverse: false, reverseProvider: 'bundled', defaultEngine: 'reverse', artifactDir: artifacts, projectRoot: cfg.projectRoot });
-assert.equal(definitions.size, 40);
+assert.equal(definitions.size, 43);
 const jobs = {
   run: args => definitions.get('ig5_ir').execute(args, { agent: { id: 'offline-vmp-recovery-test' }, signal: new AbortController().signal }),
   dispose: async () => { for (const remove of effects.reverse()) await remove(); },

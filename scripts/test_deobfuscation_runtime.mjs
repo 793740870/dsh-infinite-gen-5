@@ -27,7 +27,7 @@ const pass = (label, data = {}) => { report.checks.push({ label, ...data }); con
 try {
   apply(ctx, { toolset: 'full', reverseProvider: 'bundled', defaultEngine: 'reverse', reverse: false,
     artifactDir: path.join(output, 'analysis'), projectRoot: path.join(output, 'projects'), requestTimeoutMs: 120000, openTimeoutMs: 180000 });
-  assert.equal(definitions.size, 40);
+  assert.equal(definitions.size, 43);
   const opened = await call('ig5_open', { path: target, background: false });
   assert.equal(opened.engine, 'reverse'); assert.equal(opened.provider, 'ghidra');
   const before = await call('ig5_bytes', { ea: fixture.addresses.dispatcher, size: 128 });

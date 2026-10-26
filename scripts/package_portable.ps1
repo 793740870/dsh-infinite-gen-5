@@ -25,6 +25,7 @@ $destination = Join-Path $output ("IG5-portable-" + $package.version + '-' + (Ge
 $stage = Join-Path $output ".ig5-package-$token"
 try {
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    $script:IG5SkippedRootFiles.Clear()
     Copy-IG5Pack $source (Join-Path $stage 'plugin') @('runtimes')
     Copy-IG5Pack $runtimeInput (Join-Path $stage 'plugin\runtimes')
     Write-IG5RuntimeManifest $validated (Join-Path $stage 'plugin\runtimes') ([string]$package.version)
@@ -41,7 +42,7 @@ Install from PowerShell:
 Then restart DeepSeek Harness and call ig5_doctor.
 
 Reverse is the default bundled analysis lane (reverseProvider=bundled, provider=ghidra).
-40 public tools include independent HTTP/HTTPS capture; no Burp program is required.
+43 public tools include independent HTTP/HTTPS capture; no Burp program is required.
 The optional commercial compatibility provider requires a separately licensed local installation.
 DeepSeek Harness and commercial programs/licenses are not bundled.
 Upstream licenses, notices, source audit assets and SHA-256 manifests are preserved.
@@ -53,7 +54,7 @@ User projects, sessions, downloads and build caches are excluded.
            sha256 = Get-IG5Hash $_.FullName }
     })
     $manifest = @{ schemaVersion = 1; pluginVersion = $package.version; version = $package.version; platform = 'win32-x64'; createdAt = [DateTime]::UtcNow.ToString('o');
-        engines = @('reverse', 'ghidra', 'x64dbg'); defaultEngine = 'reverse'; reverseProvider = 'bundled'; builtInProvider = 'ghidra'; publicToolCount = 40;
+        engines = @('reverse', 'ghidra', 'x64dbg'); defaultEngine = 'reverse'; reverseProvider = 'bundled'; builtInProvider = 'ghidra'; publicToolCount = 43;
         includesProjects = $false; files = $records }
     [IO.File]::WriteAllText((Join-Path $stage 'manifest.json'), ($manifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $stage -Destination $destination
@@ -68,6 +69,7 @@ User projects, sessions, downloads and build caches are excluded.
 }
 Write-Output ("PORTABLE_ROOT=" + $destination)
 Write-Output ("FILES=" + $records.Count)
+foreach ($skipped in @($script:IG5SkippedRootFiles | Sort-Object -Unique)) { Write-Output ("SKIPPED_ROOT=" + $skipped) }
 $totalBytes = [long]0
 foreach ($record in $records) { $totalBytes += [long]$record.bytes }
 Write-Output ("BYTES=" + $totalBytes)

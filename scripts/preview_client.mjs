@@ -3,8 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { runKnowledge } from '../source/knowledge_catalog.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const researchPreviewConfig = process.env.IG5_PREVIEW_KNOWLEDGE_ROOT ? { projectRoot: path.resolve(process.env.IG5_PREVIEW_KNOWLEDGE_ROOT) } : {};
+// Optional owned native result for rendering QA; HTTP remains fixture-only.
+const uxrNative = process.env.IG5_PREVIEW_UXR_JSON ? JSON.parse(fs.readFileSync(process.env.IG5_PREVIEW_UXR_JSON, 'utf8')) : null;
+if (uxrNative && (typeof uxrNative.code !== 'string' || Buffer.byteLength(uxrNative.code) > 1024 * 1024)) throw new Error('Invalid bounded native code fixture');
 const asar = process.env.IG5_PREVIEW_ASAR || path.join(process.env.LOCALAPPDATA || '', 'Programs', 'DeepSeek Harness', 'resources', 'app.asar');
 const fd = fs.openSync(asar, 'r');
 const prefix = Buffer.alloc(16); fs.readSync(fd, prefix, 0, prefix.length, 0);
@@ -41,6 +46,7 @@ const cfg={func:'decode_packet',start_ea:'0x140001000',total_blocks:6,total_edge
 {id:5,start:'0x140001090',end:'0x140001094',insns:2,succs:[],first:'pop rbp',last:'ret'}],edges:[{from:0,to:1},{from:0,to:2},{from:1,to:3},{from:2,to:3},{from:3,to:3},{from:3,to:4},{from:4,to:5}],mermaid:'flowchart TD\\n B0 --> B1\\n B0 --> B2\\n B1 --> B3\\n B2 --> B3\\n B3 --> B3\\n B3 --> B4\\n B4 --> B5'};
 const target='C:\\\\fixtures\\\\sample.exe', declaration='struct Packet {\\n  unsigned int id;\\n  char payload[32];\\n};';
 const variables=[{name:'key',type:'unsigned int',size:4,is_arg:true},{name:'buffer',type:'char *',size:8,is_arg:true},{name:'i',type:'int',size:4,is_arg:false}];
+const nativePreview=${JSON.stringify(uxrNative).replace(/</g, '\\u003c')};
 const code='int decode_packet(unsigned int key, char *buffer)\\n{\\n  for (int i = 0; i < 32; ++i)\\n    buffer[i] ^= key;\\n  return key != 0;\\n}';
 const journal=Array.from({length:50},(_,i)=>({ts:'2026-10-09T12:'+String(i).padStart(2,'0')+':00Z',tool:i%3?'ig5_patch_bytes':'ig5_comment',args:{target,engine:i%2?'ghidra':'reverse',ea:'0x140001000'},detail:i%3?{before:'90 90',after:'CC 90',fileOffset:i}: {note:'人工审阅备注 <scr'+'ipt>仅显示文本</scr'+'ipt>'},isError:i===7}));
 const scan={schemaVersion:2,sourceEngine:'ghidra',idb_modified:false,
@@ -54,14 +60,16 @@ analysisResults[analysisRows[1].id]={...analysisRows[1],input:{ref:'sha256:'+('3
 const config={host:{id:'win32-x64',supported:true,execution:'local-node-host'},runtimeSource:{ghidra:'bundled',x64dbg:'bundled'},engines:[{id:'reverse',available:true},{id:'ghidra',available:true,source:'bundled'},{id:'x64dbg',available:true,source:'bundled'}]};
 function snapshotFor(engine){return {target,engine,projectId:'project_fixture',artifactId:'artifact_fixture_hash',sha256:'1'.repeat(64),provider:engine==='x64dbg'?'x64dbg':'ghidra',attachmentId:'preview-1',dbRevision:['reverse','ghidra','x64dbg'].indexOf(engine)};}
 window.__ig5Requests=[];window.__ig5Focuses=[];
+const previewNativeFetch=window.fetch.bind(window);
 window.fetch=async(url,options)=>{
  const u=new URL(url,location.href),q=u.searchParams,type=q.get('type'),engine=q.get('engine')||'reverse';let data;window.__ig5Requests.push({url:String(url),method:options&&options.method||'GET'});
  if(u.pathname==='/ig5-diag')return {ok:true,json:async()=>({ok:true})};
  if(u.pathname==='/ig5-jobs')return {ok:true,json:async()=>({config,now:Date.now(),jobs:[],sessions:['reverse','ghidra','x64dbg'].map(engine=>({key:engine+':fixture',...snapshotFor(engine),alive:true,n_funcs:2,n_segs:5,n_imports:12,bits:64,cpu:'x86_64',file_type:'PE'}))})};
  if(u.pathname!=='/ig5-data'||(options&&options.method&&options.method!=='GET'))throw Error('preview refuses write requests');
+ if(type==='knowledge')return previewNativeFetch(url);
  switch(type){
  case 'funcs': data={funcs:[{ea:'0x140001000',name:'decode_packet',size:148},{ea:'0x140002000',name:'check_header',size:40}],total:2};break;
- case 'decompile': data={ea:q.get('ea'),name:q.get('ea')==='0x140001000'?'decode_packet':'check_header',code:'/* '+engine+' fixture */\\n'+code};break;
+ case 'decompile': data=nativePreview?{...nativePreview,ea:q.get('ea')}:{ea:q.get('ea'),name:q.get('ea')==='0x140001000'?'decode_packet':'check_header',code:'/* '+engine+' fixture */\\n'+code};break;
  case 'cfg': data=cfg;break;
  case 'slice': data={variables,slice_variable:q.get('var'),slice_lines:q.get('var')?code.split('\\n').map((code,i)=>({line_no:i+1,code})).filter(x=>x.code.includes(q.get('var'))):[]};break;
  // Keep fixture envelopes aligned with both workers, rather than pre-normalizing for the UI.
@@ -94,6 +102,16 @@ const server = http.createServer((req, res) => {
   if (req.method !== 'GET') { res.writeHead(405); res.end('Read-only preview'); return; }
   res.setHeader('cache-control', 'no-store');
   if (url.pathname === '/') { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(html); }
+  else if (url.pathname === '/ig5-data' && url.searchParams.get('type') === 'knowledge') {
+    res.setHeader('content-type', 'application/json; charset=utf-8');
+    try {
+      const q = url.searchParams, input = { action: q.get('action') || 'status' };
+      for (const key of ['query','category','generation','cursor']) if (q.has(key)) input[key] = q.get(key);
+      for (const key of ['limit','offset']) if (q.has(key)) input[key] = Number(q.get(key));
+      if (q.has('id')) input.ref = { id: q.get('id'), sha256: q.get('sha256') };
+      res.end(JSON.stringify({ data: runKnowledge(researchPreviewConfig, input) }));
+    } catch (error) { res.end(JSON.stringify({ error: error.message })); }
+  }
   else if (url.pathname === '/runtime.js') { res.setHeader('content-type', 'text/javascript; charset=utf-8'); res.end(runtime); }
   else if (url.pathname === '/client.js') { res.setHeader('content-type', 'text/javascript; charset=utf-8'); res.end(fs.readFileSync(path.join(root, 'client.js'))); }
   else if (/^\/vendor-[\w-]+\.js$/.test(url.pathname) && assetNames.includes(url.pathname.slice(1))) { res.setHeader('content-type', 'text/javascript; charset=utf-8'); res.end(archiveText(`${assetRoot}/${url.pathname.slice(1)}`)); }

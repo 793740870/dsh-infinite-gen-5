@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import { runKnowledge } from '../source/knowledge_catalog.js';
+import os from 'node:os';
+import path from 'node:path';
+import { knowledgeHash } from '../source/knowledge_io.js';
+import { documentIdentity } from '../source/knowledge_documents.js';
+import { publishPublicKnowledgeV2 } from '../source/knowledge_publish_v2.js';
+import { publicDocument, publicMethod } from './fixtures/research_v2.mjs';
 
 const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 let currentHarness;
@@ -26,9 +33,92 @@ const React = {
 const same = (a, b) => !!a && !!b && a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
 let request = () => { throw new Error('unexpected network call'); };
 let api;
-const sandbox = { window: { __ModuleLoader__: { load: value => { api = value.factory(name => { assert.equal(name, 'react'); return React; }); } } }, console, URLSearchParams, fetch: (...args) => request(...args), setTimeout, clearTimeout, location: { href: 'http://localhost/test' }, navigator: {} };
+const sandbox = { window: { __ModuleLoader__: { load: value => { api = value.factory(name => { assert.equal(name, 'react'); return React; }); } } }, console, URL, URLSearchParams, fetch: (...args) => request(...args), setTimeout, clearTimeout, location: { href: 'http://localhost/test' }, navigator: {} };
 vm.runInNewContext(source, sandbox, { filename: 'client.js' });
 const ui = api.__test;
+
+test('fusion history renders explicit cross-block, candidate, VM identity and unknown boundaries as safe native cards',()=>{
+ for(const value of [{schema:'ig5-cff-state-report-v1',summary:{verifiedRoutes:2,competingVariables:[{}],routes:[{predecessor:0,dispatcher:1,destination:2,status:'verified-in-scope',condition:'<script>literal</script>'}]}},{schema:'ig5-small-vm-check-v1',identities:[{complete:false,missing:['memoryEpoch']}],pairs:[{a:0,b:1,status:'distinct',differences:['tableSha256']}],checks:[{index:0,status:'pass-in-finite-model',cases:32,initialResultSensitivity:true}]},{schema:'ig5-bitvector-verification-v1',status:'pass',original:{nodes:[{},{}]},candidate:{nodes:[{}]}}]){
+  const tree=ui.FusionEvidence({report:{id:'owned-history',fusion:{value,responseTruncated:true}}}),rendered=text(tree);assert(rendered.includes('历史摘要'));assert(rendered.includes('尚未重绑'));assert(rendered.includes('预览有省略'));assert(!nodes(tree,n=>n.type==='script'||n.type==='iframe'||n.props.dangerouslySetInnerHTML).length);assert(rendered.includes('未由此升级'));
+ }
+ assert.equal(ui.FusionEvidence({report:{value:{schema:'unknown-future-schema'}}}),null);
+});
+
+test('original article view retains native cards, renders source text safely and follows verified reference links', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig5-ui-doc-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const body = '# MBA original\n<script>not executable</script>\n' + '原文'.repeat(1600), sourceUrl = 'https://example.com/paper';
+  const doc = { schema: 'ig5-source-document-v1', id: documentIdentity(sourceUrl, knowledgeHash(body)), title: 'Original article', author: 'Research author', sourceUrl,
+    body, contentSha256: knowledgeHash(body), publishedAt: null, retrievedAt: '2026-10-24T00:00:00.000Z', license: 'test fixture', rightsStatus: 'local-reference-only', methodIds: ['mba-synthesis'], reviewNotes: ['原文代码只作为资料。'] };
+  fs.mkdirSync(path.join(root, 'knowledge-v1')); fs.writeFileSync(path.join(root, 'knowledge-v1', 'catalog.json'), JSON.stringify({ schema: 'ig5-knowledge-catalog-v1', cards: [], documents: [doc] }));
+  request = async url => {
+    const q = new URL(url, 'http://test').searchParams, input = { action: q.get('action') };
+    for (const key of ['query','category','generation','cursor']) if (q.has(key)) input[key] = q.get(key);
+    for (const key of ['offset','limit']) if (q.has(key)) input[key] = Number(q.get(key));
+    if (q.has('id')) input.ref = { id: q.get('id'), sha256: q.get('sha256') };
+    return { ok: true, json: async () => ({ data: runKnowledge({ projectRoot: root }, input) }) };
+  };
+  const h = harness(ui.KnowledgeView); h.render(); await settle(); h.render();
+  button(h.tree, '原文').props.onClick(); await settle(); h.render();
+  nodes(h.tree, n => n.type === 'button' && text(n).includes('Original article'))[0].props.onClick(); await settle(); h.render();
+  assert.equal(button(h.tree, '生成方法应用草稿').props.disabled, true);
+  assert(text(h.tree).includes('<script>not executable</script>')); assert.equal(nodes(h.tree, n => n.type === 'script' || n.props.dangerouslySetInnerHTML).length, 0);
+  assert(nodes(h.tree, n => n.props.className === 'ig5-card').length > 0); assert(text(h.tree).includes('阅读提示'));
+  button(h.tree, '继续读取原文').props.onClick(); await settle(); h.render(); assert(text(h.tree).includes('原文已读完'));
+  assert.equal(button(h.tree, '生成方法应用草稿').props.disabled, false);
+  button(h.tree, 'MBA：候选合成与独立等价核验').props.onClick(); await settle(); h.render();
+  assert(text(h.tree).includes('方法笔记')); assert(text(h.tree).includes('参考原文')); h.unmount();
+});
+
+test('v2 typed sources and withdrawn history retain the existing knowledge view and explicit status', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ig5-ui-v2-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const published=publishPublicKnowledgeV2({projectRoot:root,expectedGeneration:'absent',upserts:[publicMethod(),publicDocument('v2-ui-document','<script>literal v2 text</script>')],withdrawals:[]});
+  request=async url=>{const q=new URL(url,'http://test').searchParams,input={action:q.get('action')};for(const k of ['query','category','generation','cursor'])if(q.has(k))input[k]=q.get(k);for(const k of ['offset','limit'])if(q.has(k))input[k]=Number(q.get(k));if(q.has('id'))input.ref={id:q.get('id'),sha256:q.get('sha256')};return {ok:true,json:async()=>({data:runKnowledge({projectRoot:root},input)})};};
+  const h=harness(ui.KnowledgeView);h.render();await settle();h.render();
+  nodes(h.tree,n=>n.type==='input' && n.props['aria-label']==='检索研究方法')[0].props.onChange({target:{value:'fixture'}});h.render();button(h.tree,'检索方法').props.onClick();await settle();h.render();
+  nodes(h.tree,n=>n.type==='button' && text(n).includes('Fixture research document'))[0].props.onClick();await settle();h.render();assert(text(h.tree).includes('Synthetic test fixture'));
+  button(h.tree,'原文').props.onClick();await settle();h.render();
+  const ref=runKnowledge({projectRoot:root},{action:'documents'}).items[0].ref;
+  publishPublicKnowledgeV2({projectRoot:root,expectedGeneration:published.generation,upserts:[],withdrawals:[{ref,reason:'Fixture correction',replacementRef:null}]});
+  nodes(h.tree,n=>n.type==='button' && text(n).includes('Fixture research document'))[0].props.onClick();await settle();h.render();
+  assert(text(h.tree).includes('此资料已撤回'));assert(text(h.tree).includes('原创笔记'));assert(text(h.tree).includes('<script>literal v2 text</script>'));assert.equal(nodes(h.tree,n=>n.type==='script' || n.props.dangerouslySetInnerHTML).length,0);h.unmount();
+});
+
+test('research view browses real local references, preserves drafts and never submits', async () => {
+  let inserted = '', submissions = 0;
+  request = async url => {
+    const q = new URL(url, 'http://test').searchParams;
+    assert.equal(q.get('type'), 'knowledge'); assert.equal(q.has('target'), false); assert.equal(q.has('engine'), false);
+    const input = { action: q.get('action') };
+    for (const key of ['query','category','generation','cursor']) if (q.has(key)) input[key] = q.get(key);
+    for (const key of ['limit','offset']) if (q.has(key)) input[key] = Number(q.get(key));
+    if (q.has('id')) input.ref = { id: q.get('id'), sha256: q.get('sha256') };
+    return { ok: true, json: async () => ({ data: runKnowledge({}, input) }) };
+  };
+  const actions = { captureInsertion() { return {}; }, insertText(value) { inserted = value; return true; }, persistDraft() {}, submit() { submissions++; } };
+  const h = harness(ui.KnowledgeView, { inputActions: actions }); h.render(); await settle(); h.render();
+  assert(text(h.tree).includes('研究资料与方法'));
+  nodes(h.tree, n => n.type === 'button' && text(n).includes('MBA：候选合成'))[0].props.onClick(); await settle(); h.render();
+  assert(text(h.tree).includes('unknown 保留原式'));
+  button(h.tree, '生成方法应用草稿').props.onClick(); h.render();
+  button(h.tree, '插入方法草稿（待发送）').props.onClick(); h.render();
+  assert.match(inserted, /ig5_profile/); assert.match(inserted, /sha256/); assert.equal(submissions, 0);
+  assert(text(h.tree).includes('尚未发送或执行')); h.unmount();
+});
+
+test('late research detail and draft cannot cross target or attachment changes', async () => {
+  const late = deferred();
+  request = async url => {
+    const q = new URL(url, 'http://test').searchParams;
+    if (q.get('action') === 'read') return late.promise;
+    return { ok: true, json: async () => ({ data: runKnowledge({}, { action: 'methods' }) }) };
+  };
+  const h = harness(ui.KnowledgeView, { target: 'old.exe', engine: 'reverse', session: { attachmentId: 'old' } });
+  h.render(); await settle(); h.render(); nodes(h.tree, n => n.type === 'button' && text(n).includes('MBA：候选合成'))[0].props.onClick();
+  h.render({ target: 'new.exe', engine: 'reverse', session: { attachmentId: 'new' } });
+  const ref = runKnowledge({}, { action: 'search', query: 'MBA' }).items[0].ref;
+  late.resolve({ ok: true, json: async () => ({ data: { ...runKnowledge({}, { action: 'read', ref }), body: 'OLD-PRIVATE-RESEARCH' } }) });
+  await settle(); h.render(); assert(!text(h.tree).includes('OLD-PRIVATE-RESEARCH')); assert(!text(h.tree).includes('生成方法应用草稿')); h.unmount();
+});
 const plain = value => JSON.parse(JSON.stringify(value));
 function harness(component, props = {}) {
   return { component, props, cells: [], effects: [], pending: [], cursor: 0, tree: null,
@@ -60,6 +150,66 @@ test('CFG layout preserves branches, loops and disconnected blocks without inval
   assert.equal(graph.edges[0].label, '分支 1'); assert.equal(graph.edges[1].label, '分支 2'); assert.equal(graph.edges[2].label, '回边');
   assert.ok(graph.edges.every(e => !/NaN|undefined/.test(e.path)));
   assert.equal(new Set(graph.nodes.map(n => `${n.x},${n.y}`)).size, 4);
+});
+
+test('investigation reads exact snapshots, drafts through the composer and never executes or submits', async () => {
+  const brief = { taskId: 't1', snapshot: { taskRevision: 4, researchRevision: 2 }, question: '<script>question</script>',
+    acceptance: { status: 'partial' }, workStatus: 'completed', resourceStatus: 'retained-unknown',
+    nextExperiments: [{ rationale: 'missing evidence', request: { tool: 'ig5_decompile', target: 'same.exe', ea: '0x1000' } }] };
+  let inserted = '', persisted = 0, requests = [];
+  request = async url => { const q = new URL(url, 'http://local').searchParams; requests.push(q);
+    assert.equal(q.get('type'),'investigation'); assert(q.has('expected_snapshot'));
+    return scopedResponse(mountedSession,q.get('action') === 'list' ? { tasks: [{ taskId: 't1', taskRevision: 4, goal: 'Task One' }] } : brief); };
+  const h = harness(ui.InvestigationView,{ target: 'same.exe', engine: 'reverse', session: mountedSession,
+    inputActions: { captureInsertion: () => ({ start: 2 }), insertText: value => { inserted = value; return true; }, persistDraft: () => persisted++ } });
+  h.render(); await settle(); h.render(); button(h.tree,'Task One').props.onClick(); await settle(); h.render();
+  assert(markup(h.tree).includes('&lt;script&gt;question&lt;/script&gt;'));
+  assert(text(h.tree).includes('completed') && text(h.tree).includes('partial') && text(h.tree).includes('retained-unknown'));
+  assert.equal(requests[1].get('task_revision'),'4');
+  button(h.tree,'生成实验草稿 1').props.onClick(); h.render(); await button(h.tree,'插入调查草稿（待发送）').props.onClick();
+  assert(inserted.includes('ig5_decompile')); assert.equal(persisted,1); assert.equal(requests.length,3);
+  h.unmount();
+});
+
+test('investigation hides old task evidence and drafts during same-target database reopen before effects settle', async () => {
+  const late = deferred(); let calls = 0;
+  request = async url => {
+    calls++; const q = new URL(url,'http://local').searchParams;
+    return q.get('action') === 'list' ? scopedResponse(mountedSession,{ tasks: [{ taskId: 'old', taskRevision: 1, goal: 'OldTask' }] }) : late.promise;
+  };
+  const h = harness(ui.InvestigationView,{ target: 'same.exe', engine: 'reverse', session: mountedSession });
+  h.render(); await settle(); h.render(); button(h.tree,'OldTask').props.onClick();
+  h.render({ target: 'same.exe', engine: 'reverse', session: { ...mountedSession, attachmentId: 'new-owner' } });
+  assert(!text(h.tree).includes('OldTask'));
+  late.resolve(scopedResponse(mountedSession,{ taskId: 'old', snapshot: { taskRevision: 1 }, question: 'OLD-SECRET-EVIDENCE' }));
+  await settle(); h.render(); assert(!text(h.tree).includes('OLD-SECRET-EVIDENCE')); assert(calls >= 3); h.unmount();
+});
+test('fusion investigation buttons make only exact read proposal drafts and revalidate before composer insertion',async()=>{
+ const brief={taskId:'t1',snapshot:{taskRevision:4,researchRevision:2},question:'Owned fixture',nextExperiments:[]};let calls=0,inserted='';request=async url=>{calls++;const q=new URL(url,'http://local').searchParams;return scopedResponse(mountedSession,q.get('action')==='list'?{tasks:[{taskId:'t1',taskRevision:4,goal:'Fixture'}]}:brief);};
+ const h=harness(ui.InvestigationView,{target:'same.exe',engine:'reverse',session:mountedSession,inputActions:{captureInsertion:()=>({}),insertText:s=>{inserted=s;return true;}}});h.render();await settle();h.render();button(h.tree,'Fixture').props.onClick();await settle();h.render();const before=calls;
+ button(h.tree,'生成实验建议草稿').props.onClick();h.render();assert.equal(calls,before);const draft=nodes(h.tree,n=>n.type==='textarea')[0].props.value;assert(draft.includes('experiment-shadow'));assert(draft.includes('shadow'));assert(!draft.includes('assist'));await button(h.tree,'插入调查草稿（待发送）').props.onClick();assert.equal(calls,before+1);assert(inserted.includes('experiment-shadow'));h.unmount();
+});
+test('all-analysis mode hides saved fusion detail and late response after target attachment changes',async()=>{
+ const late=deferred();request=async url=>{const q=new URL(url,'http://local').searchParams;return q.get('type')==='analyses'?response({items:[analysisItem('old-report')],total:1}):late.promise;};const h=harness(ui.AnalysisView,{target:'A.exe',engine:'ghidra',session:{attachmentId:'a'}});h.render();await settle();h.render();analysisButton(h.tree,'old-report').props.onClick();h.render();h.render({target:'B.exe',engine:'ghidra',session:{attachmentId:'b'}});late.resolve(response({id:'old-report',value:{secret:'OLD-FUSION-DETAIL'}}));await settle();h.render();assert(!text(h.tree).includes('OLD-FUSION-DETAIL'));assert(!nodes(h.tree,n=>n.type===ui.AnalysisEvidence).length);h.unmount();
+});
+
+test('pending investigation draft revalidation cannot insert after switching tasks with identical revision numbers', async () => {
+  const late = deferred(); let reads = 0, inserted = 0;
+  const makeBrief = id => ({ taskId: id, snapshot: { taskRevision: 1, researchRevision: 1 }, question: id,
+    nextExperiments: [{ request: { tool: 'ig5_decompile', target: 'same.exe', ea: '0x1000' } }] });
+  request = async url => {
+    const q = new URL(url,'http://local').searchParams;
+    if(q.get('action') === 'list') return scopedResponse(mountedSession,{ tasks: ['One','Two'].map(id => ({ taskId: id, taskRevision: 1, goal: id })) });
+    reads++; if(reads === 2) return late.promise;
+    return scopedResponse(mountedSession,makeBrief(q.get('id')));
+  };
+  const h = harness(ui.InvestigationView,{ target: 'same.exe', engine: 'reverse', session: mountedSession,
+    inputActions: { captureInsertion: () => ({}), insertText: () => { inserted++; return true; }, persistDraft: () => assert.fail('stale draft persisted') } });
+  h.render(); await settle(); h.render(); button(h.tree,'One').props.onClick(); await settle(); h.render();
+  button(h.tree,'生成实验草稿 1').props.onClick(); h.render(); const pending = button(h.tree,'插入调查草稿（待发送）').props.onClick();
+  button(h.tree,'Two').props.onClick(); await settle(); h.render();
+  late.resolve(scopedResponse(mountedSession,makeBrief('One'))); await pending;
+  assert.equal(inserted,0); h.unmount();
 });
 
 test('large CFG is bounded and truthfully marks truncation', () => {
@@ -740,6 +890,18 @@ test('overview preserves partial analysis status instead of presenting completio
   assert.ok(nodes(h.tree, node => node.props?.className === 'ig5-chip warn').length); h.unmount();
 });
 
+test('overview exposes the official GitHub project without taking over the workbench', () => {
+  const h = harness(ui.OverviewCard, { sessions: [], currentSession: null, runningCount: 0 });
+  h.render();
+  const links = nodes(h.tree, node => node.type === 'a' && node.props?.className === 'ig5-project-link');
+  assert.equal(links.length, 1);
+  assert.equal(text(links[0]), 'GitHub 项目 ↗');
+  assert.equal(links[0].props.href, 'https://github.com/Minglink/dsh-infinite-gen-5');
+  assert.equal(links[0].props.target, '_blank');
+  assert.equal(links[0].props.rel, 'noopener noreferrer');
+  h.unmount();
+});
+
 test('empty workbench uses the configured default and does not imply Reverse analysis', async () => {
   request = () => Promise.resolve({ ok: true, json: async () => ({ config: { engine: 'ghidra' }, sessions: [], jobs: [] }) });
   const h = harness(ui.Workbench, {}); h.render(); await settle(); h.render();
@@ -1041,4 +1203,22 @@ test('analysis history paginates, rejects late page responses and resets offset 
   analysisButton(h.tree, 'B-PAGE0'); assert.ok(!text(h.tree).includes('STALE-A'));
   assert.equal(button(h.tree, '上一页分析结果').props.disabled, true); assert.equal(button(h.tree, '下一页分析结果').props.disabled, true);
   h.unmount();
+});
+
+test('function view keeps long code intact and labels only a mapped ELF address', async () => {
+  const code = 'void main() {\n' + '  value ^= input;\n'.repeat(900) + '  /* <script>literal</script> */\n  return;\n}\n';
+  for (const addresses of [{ status: 'mapped', space: 'elf_vaddr', value: '0x401000' }, { status: 'unknown', space: 'elf_vaddr', value: '0xdead' }]) {
+    request = async url => {
+      const type = new URL(url, 'http://test').searchParams.get('type');
+      return response(type === 'funcs' ? { funcs: [{ ea: '0x1000', name: 'main' }], total: 1 }
+        : type === 'decompile' ? { ea: '0x1000', name: 'main', code, addresses } : { rows: [] });
+    };
+    const h = harness(ui.FunctionsView, { target: 'owned.elf', engine: 'ghidra' });
+    h.render(); await settle(); h.render(); row(h.tree, 'main').props.onClick(); await settle(); h.render();
+    const pre = nodes(h.tree, node => node.type === 'pre' && node.props.className.includes('ig5-code-box'))[0];
+    assert.equal(text(pre), code);
+    assert.equal(text(h.tree).includes('ELF vaddr '), addresses.status === 'mapped');
+    assert(markup(pre).includes('&lt;script&gt;literal&lt;/script&gt;'));
+    h.unmount();
+  }
 });

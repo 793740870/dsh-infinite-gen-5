@@ -24,21 +24,49 @@ try {
     Check (Test-IG5ExcludedPath 'adapters/vmci/native/launcher.obj') 'guest launcher intermediate object must not be packaged'
     Check (-not (Test-IG5ExcludedPath 'third_party/sources/ghidra-master/Framework/scratch/source.c')) 'upstream source paths must retain their original names'
     Pass 'packaging excludes root experiments and local intermediate objects while preserving upstream source paths'
+    $rootFixture = Join-Path $fixtureRoot 'pack-root'
+    Put (Join-Path $rootFixture 'package.json') '{}'
+    Put (Join-Path $rootFixture 'index.js') 'x'
+    Put (Join-Path $rootFixture 'README.md') 'x'
+    Put (Join-Path $rootFixture 'source\a.js') 'x'
+    Put (Join-Path $rootFixture 'fixture.exe') 'junk'
+    Put (Join-Path $rootFixture 'err.log') 'junk'
+    $rootFiles = @(Get-IG5PackFiles $rootFixture | ForEach-Object { Get-IG5RelativePath $rootFixture $_.FullName } | Sort-Object)
+    Check ($rootFiles -notcontains 'fixture.exe' -and $rootFiles -notcontains 'err.log') 'stray root artifacts must not be packaged'
+    Check ($rootFiles -contains 'index.js' -and $rootFiles -contains 'source/a.js') 'allowlisted root files and subdirectories must still be packaged'
+    Put (Join-Path $rootFixture 'new_module.js') 'x'
+    Expect-Failure { $null = @(Get-IG5PackFiles $rootFixture) } 'Unexpected plugin root file'
+    Pass 'packaging allowlists plugin root files and refuses to drop unregistered code silently'
+    $inventoryFixture = Join-Path $fixtureRoot 'release-root'
+    Put (Join-Path $inventoryFixture 'package.json') '{}'
+    Put (Join-Path $inventoryFixture 'index.js') 'export default {};'
+    $inventory = @(Get-IG5PackFiles $inventoryFixture | ForEach-Object {
+        @{path=(Get-IG5RelativePath $inventoryFixture $_.FullName);bytes=$_.Length;sha256=(Get-IG5Hash $_.FullName)}
+    })
+    Assert-IG5FileInventory $inventoryFixture $inventory 'plugin' -IncludeUnlistedRootFiles
+    foreach ($extra in @('extra_payload.dll','fixture.exe','err.log','unlisted.js')) {
+        $extraPath = Join-Path $inventoryFixture $extra
+        Put $extraPath 'unregistered release file'
+        Expect-Failure { Assert-IG5FileInventory $inventoryFixture $inventory 'plugin' -IncludeUnlistedRootFiles } $extra
+        Remove-Item -LiteralPath $extraPath
+    }
+    Assert-IG5FileInventory $inventoryFixture $inventory 'plugin' -IncludeUnlistedRootFiles
+    Pass 'complete release inventory rejects unregistered root binaries, logs and code while source packing retains its allowlist'
     New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'optional-invalid\mergen') -Force | Out-Null
     Put (Join-Path $fixtureRoot 'optional-invalid\mergen\manifest.json') '{"files":[]}'
     Expect-Failure { Assert-IG5RuntimeExtensions (Join-Path $fixtureRoot 'optional-invalid') } 'manifest pin mismatch'
     Pass 'optional runtimes cannot replace fixed manifests with self-authenticated inventories'
-    foreach ($pair in @(@('1.0.0','1.0.0'), @('1.1.0','1.1.0'), @('1.0.0','1.1.0'))) {
+    foreach ($pair in @(@('1.0.0','1.0.0'), @('1.1.0','1.1.0'), @('1.0.0','1.1.0'), @('1.0.0','1.2.0'), @('1.2.0','1.2.0'), @('1.0.0','1.3.0'), @('1.3.0','1.3.0'))) {
         Check (Test-IG5RuntimeVersion $pair[0] $pair[1]) "Expected asset $($pair[0]) to support plugin $($pair[1])"
     }
-    foreach ($pair in @(@('0.9.0','1.1.0'), @('1.2.0','1.1.0'), @('1.1.0','1.0.0'), @('1.0.0','0.9.0'), @('1.0.0','1.2.0'), @('1.0.0','1.1.1'), @('1.0.0','1.1.0-beta.1'), @('','1.1.0'), @('1.0.0 ','1.1.0'))) {
+    foreach ($pair in @(@('0.9.0','1.1.0'), @('1.2.0','1.1.0'), @('1.1.0','1.0.0'), @('1.0.0','0.9.0'), @('1.1.0','1.2.0'), @('1.0.0','1.2.1'), @('1.0.0','1.1.1'), @('1.0.0','1.1.0-beta.1'), @('','1.1.0'), @('1.0.0 ','1.1.0'))) {
         Check (-not (Test-IG5RuntimeVersion $pair[0] $pair[1])) "Unexpected version reuse: $($pair[0]) -> $($pair[1])"
     }
-    Pass 'native runtime reuse is exact 1.0.0 -> 1.1.0 only, with normal exact-version matches'
+    Pass 'native runtime reuse is exact 1.0.0 -> 1.1.0/1.2.0/1.3.0 only, with normal exact-version matches'
 
     $descriptorFile = Join-Path $sourceRoot 'scripts\distribution.json'
     $descriptorHash = Get-IG5Hash $descriptorFile
-    $descriptor = Get-IG5DistributionDescriptor $sourceRoot '1.1.0'
+    $descriptor = Get-IG5DistributionDescriptor $sourceRoot '1.3.0'
     Check ($descriptor.pluginVersion -ceq '1.0.0') 'the donor version must remain 1.0.0'
     Check ($descriptor.releaseTag -ceq 'v1.0.0-dsh021-20261010') 'immutable donor release changed'
     Check ($descriptor.assetName -ceq 'IG5-1.0.0-Windows-x64-dsh021-full-20261010.zip') 'immutable donor asset changed'
@@ -59,26 +87,26 @@ try {
     foreach ($key in $expectedInventories.Keys) { Check ($descriptor.sourceInventorySha256.$key -ceq $expectedInventories[$key]) "Source inventory pin changed: $key" }
     Check ($descriptor.nativeBridgeSha256.'ig5-bridge.dp64' -ceq '99209ec4db3adfe1bc8fbd97897dd2427d2080e7bcd927943efcdbb8d71a762e') 'x64 bridge pin changed'
     Check ($descriptor.nativeBridgeSha256.'ig5-bridge.dp32' -ceq 'fea30cb41c487eea92bc1b525d61f6b49158297c79516932f3d65024d7ddb855') 'x86 bridge pin changed'
-    foreach ($version in @('0.9.0','1.2.0','1.1.0-beta.1')) { Expect-Failure { Get-IG5DistributionDescriptor $sourceRoot $version } 'Distribution identity/version is invalid' }
-    Pass '1.1.0 descriptor accepts the sealed donor and preserves every public asset/inventory/bridge pin'
+    foreach ($version in @('0.9.0','1.4.0','1.1.0-beta.1','1.2.0-beta.1','1.3.0-beta.1')) { Expect-Failure { Get-IG5DistributionDescriptor $sourceRoot $version } 'Distribution identity/version is invalid' }
+    Pass '1.3.0 descriptor accepts the sealed donor and preserves every public asset/inventory/bridge pin'
 
     $manifestInput = Join-Path $fixtureRoot 'sealed\manifest.json'
     $manifestText = "{`r`n  `"schemaVersion`": 1, `"pluginVersion`": `"1.0.0`", `"platform`": `"win32-x64`", `"files`": []`r`n}`r`n"
     Put $manifestInput $manifestText
     $manifestOutput = Join-Path $fixtureRoot 'copied'
     [IO.Directory]::CreateDirectory($manifestOutput) | Out-Null
-    Write-IG5RuntimeManifest @{Legacy=$false;ManifestPath=$manifestInput} $manifestOutput '1.1.0'
+    Write-IG5RuntimeManifest @{Legacy=$false;ManifestPath=$manifestInput} $manifestOutput '1.2.0'
     Check ((Get-IG5Hash $manifestInput) -ceq (Get-IG5Hash (Join-Path $manifestOutput 'manifest.json'))) 'sealing helper changed original manifest bytes'
     Check (((Read-IG5Text (Join-Path $manifestOutput 'manifest.json') | ConvertFrom-Json).pluginVersion) -ceq '1.0.0') 'native manifest was relabeled as plugin version'
-    Pass 'copying an authenticated native manifest for 1.1.0 preserves its bytes and original version'
+    Pass 'copying an authenticated native manifest for 1.2.0 preserves its bytes and original version'
 
     # Minimal source fixture: placeholder older components satisfy unrelated source-presence
     # rules. New capture files below are independently removed one at a time to exercise
     # the real source validator. This fixture does not assert native binaries are valid.
     $pluginFixture = Join-Path $fixtureRoot 'plugin'
-    Put (Join-Path $pluginFixture 'package.json') '{"name":"dsh-infinite-gen-5","version":"1.1.0"}'
+    Put (Join-Path $pluginFixture 'package.json') '{"name":"dsh-infinite-gen-5","version":"1.3.0"}'
     $complete = $false
-    for ($attempt = 0; $attempt -lt 150; $attempt++) {
+    for ($attempt = 0; $attempt -lt 400; $attempt++) {
         try { Assert-IG5PluginSource $pluginFixture -CoreOnly; $complete = $true; break }
         catch {
             if ($_.Exception.Message -notmatch ': ([A-Za-z0-9_./-]+)$') { throw }
@@ -87,7 +115,7 @@ try {
         }
     }
     Check $complete 'minimal source fixture failed to reach a valid baseline'
-    foreach ($relative in @('capture_tools.js','source/capture_service.js','source/capture_proxy.js','source/capture_ca.js','source/capture_review.js','source/capture_payload.js','source/delivered_payload.js','source/capture_state_trace.js','source/protocol_state.js','adapters/ghidra/deobfuscation_analysis.py','source/trace_jobs.js','worker/ig5_trace.py','worker/trace_analysis.py','worker/trace_vendor/ig5-manifest.json','worker/trace_vendor/triton.cp312-win_amd64.pyd')) {
+    foreach ($relative in @('capture_tools.js','source/capture_service.js','source/capture_proxy.js','source/capture_ca.js','source/capture_review.js','source/capture_payload.js','source/delivered_payload.js','source/capture_state_trace.js','source/protocol_state.js','adapters/ghidra/deobfuscation_analysis.py','source/trace_jobs.js','worker/ig5_trace.py','worker/trace_analysis.py','worker/trace_vendor/ig5-manifest.json','worker/trace_vendor/triton.cp312-win_amd64.pyd','source/result_artifacts.js','source/function_batches.js','source/delegation_control.js','adapters/ghidra/elf_addresses.py','adapters/ghidra/result_capture.py','docs/RELEASE_1.2.0.md','docs/RELEASE_1.3.0.md')) {
         $filename = Resolve-IG5PackPath $pluginFixture $relative
         Check (Test-Path -LiteralPath $filename -PathType Leaf) "Source validator did not require capture file: $relative"
         Remove-Item -LiteralPath $filename
@@ -95,7 +123,17 @@ try {
         Put $filename 'restored source presence fixture'
         Assert-IG5PluginSource $pluginFixture -CoreOnly
     }
-    Pass '1.1.0 source preflight rejects each missing capture module before installation or packaging'
+    Pass '1.3.0 source preflight rejects each missing capture module before installation or packaging'
+
+    foreach ($relative in @('source/research_v2_contract.js','source/research_v2_store.js','source/knowledge_v2.js','source/knowledge_v2_compat.js','source/knowledge_publish_v2.js','source/research_case_index.js','source/research_case_bridge.js','source/method_registry.js','source/method_applicability.js','source/experiment_shadow.js','source/bitvector_contract.js','source/bitvector_replay.js','source/bitvector_solver.js','source/candidate_workflow.js','source/bitvector_provider.js','source/bitvector_provider_adapter.js','source/cff_overlay.js','source/cff_workflow.js','source/cff_state.js','source/cff_state_workflow.js','source/vm_instances.js','source/vm_instance_workflow.js','source/research_discovery.js','source/research_discovery_review.js','scripts/discover_research_sources.mjs','scripts/review_research_discovery.mjs','worker/bitvector_verify.py','scripts/publish_research_v2.mjs')) {
+        $filename = Resolve-IG5PackPath $pluginFixture $relative
+        Check (Test-Path -LiteralPath $filename -PathType Leaf) "Source validator did not require v2 module: $relative"
+        Remove-Item -LiteralPath $filename
+        Expect-Failure { Assert-IG5PluginSource $pluginFixture -CoreOnly } $relative
+        Put $filename 'restored v2 source presence fixture'
+        Assert-IG5PluginSource $pluginFixture -CoreOnly
+    }
+    Pass 'F02 source preflight rejects every missing sharded-store, compatibility, private-index and offline publisher module'
 
     # Caller guards remain in all installation routes; the large installer regression
     # separately exercises native asset copying and user-profile non-mutation.

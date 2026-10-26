@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { AnalysisArtifacts, decodeInline, readStableFile, hashBytes } from './source/analysis_artifacts.js';
+import { randomUUID } from 'node:crypto';
 import { AnalysisJobs } from './source/analysis_jobs.js';
+import { FirmwareJobs } from './source/firmware_jobs.js';
 import { normalizeHex } from './source/address_ref.js';
 
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
@@ -97,9 +99,29 @@ function bindRefs(node, id) {
   return copy;
 }
 
+/** Keep the saved firmware report under the artifact size limit by shortening per-file-system listings (counts stay exact). */
+function trimListings(components, keep) {
+  if (keep === Infinity) return;
+  for (const component of components) {
+    if (component.filesystem && component.filesystem.listing.length > keep) { component.filesystem.listing.length = keep; component.filesystem.listingTruncated = true; }
+    for (const child of component.children || []) trimListings(child.components || [], keep);
+  }
+}
+function outline(components, depth = 0, out = []) {
+  for (const c of components) {
+    if (out.length >= 60) break;
+    out.push({ depth, id: c.id, format: c.format, offset: c.offset, size: c.size, valid: c.valid, notes: c.notes.length, files: c.filesystem?.files });
+    for (const child of c.children || []) outline(child.components || [], depth + 1, out);
+  }
+  return out;
+}
+
 export function createAnalysisService(mgr, cfg) {
   const artifacts = new AnalysisArtifacts(path.join(cfg.artifactDir, 'analysis-data'));
   const jobs = new AnalysisJobs();
+  // APKs are analysed from disk in a roomier worker: DEX tables are large and a minute is a fair budget for a 100 MB package.
+  const apkJobs = new AnalysisJobs({ timeoutMs: 60000, memoryMb: 512 });
+  const firmwareJobs = new FirmwareJobs(cfg);
   async function input(args, kind, value = args.input, maximum = INPUT_LIMIT[kind], allowSensitive = false) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT', 'input is required');
     const fields = ['data', 'ref', 'path', 'source'].filter(key => Object.hasOwn(value, key));
@@ -196,16 +218,50 @@ export function createAnalysisService(mgr, cfg) {
         archivedLowerBound: archived.totalLowerBound, partial: active.partial || archived.partial,
         retainedRecordsAndBlobs: true, note: 'Archive removes reports from active pages; result IDs and data refs remain usable. Restore returns them to active pages.' };
     },
-    result(id, select) { const record = artifacts.get(id); return { id: record.id, createdAt: record.createdAt, kind: record.kind, action: record.action, association: record.association, input: bindRefs(record.input, id), output: bindRefs(record.output, id), ...(record.keySource ? { keySource: record.keySource } : {}), ...compactAnalysis(bindRefs(selectResult(record, select), id)) }; },
-    observeNative(request, signal) { return jobs.run('vm-observations', request, signal); },
+    result(id, select) { const record = artifacts.get(id);const r=record.result||{},fusion=['cff-state','cff-overlay','bitvector-proposal','bitvector-verification','vm-instance-comparison','vm-instance-check'].includes(record.kind)?compactAnalysis({schema:r.schema,summary:r.summary,sourceRef:r.sourceRef,contractRef:r.contractRef,originalDigest:r.originalDigest,candidateDigest:r.candidateDigest,original:r.original,candidate:r.candidate,provider:r.provider,identities:r.identities,pairs:r.pairs,checks:r.checks?.map(({transcript,...c})=>c),status:r.status,acceptedScope:r.acceptedScope,historyRebound:false}):null;
+      return { id: record.id, createdAt: record.createdAt, kind: record.kind, action: record.action, association: record.association, input: bindRefs(record.input, id), output: bindRefs(record.output, id), ...(record.keySource ? { keySource: record.keySource } : {}),...(fusion?{fusion:{...fusion,recordSha256:artifacts.metadata(id).result.recordSha256}}:{}), ...compactAnalysis(bindRefs(selectResult(record, select), id)) }; },
+    observeNative(request, signal) { return request.phaseModel === true ? jobs.runSettled('vm-observations', request, signal) : jobs.run('vm-observations', request, signal); },
     sampleVmRoles(request, signal) { return jobs.run('vm-role-samples', request, signal); },
     selectVmFlow(request, signal) { return jobs.run('vm-flow-window', request, signal); },
     replayVmFlowWitnesses(request, signal) { return jobs.run('vm-flow-witness-replay', request, signal); },
     recurVmFlow(request, signal) { return jobs.run('vm-flow-recurrences', request, signal); },
     selectVmHandlers(request, signal) { return jobs.run('vm-handler-windows', request, signal); },
     assessVmHandler(request, signal) { return jobs.run('vm-handler-assessment', request, signal); },
+    async executePackage(args) {
+      if (args.action === 'result') {
+        let record;
+        try { record = artifacts.get(args.result_id); } catch (error) { if (error.code === 'ENOENT') fail('NOT_FOUND', 'No such analysis result'); throw error; }
+        if (!['apk', 'firmware'].includes(record.kind)) fail('INVALID_REF', 'Result belongs to a different analysis lane');
+        return this.result(args.result_id, args.select);
+      }
+      if (!['apk', 'firmware', 'unpack'].includes(args.action)) fail('INVALID_INPUT', 'action must be apk, firmware, unpack or result');
+      const source = args.input;
+      if (!source || typeof source !== 'object' || Array.isArray(source) || Object.keys(source).some(key => key !== 'path') || typeof source.path !== 'string') fail('INVALID_INPUT', 'ig5_package reads an explicit local file: input={path}');
+      if (args.select !== undefined || args.result_id !== undefined) fail('INVALID_INPUT', 'select and result_id are only used with action=result');
+      const resolved = path.resolve(source.path), signal = mgr.scope?.getStore()?.signal;
+      const association = { target: args.target ? path.resolve(args.target) : resolved };
+      if (args.action === 'apk') {
+        const report = await apkJobs.run('apk', { path: resolved }, signal);
+        mgr.checkCancelled();
+        const record = artifacts.save({ kind: 'apk', action: 'apk', association, input: { origin: { kind: 'file', path: resolved }, sha256: report.file.sha256, bytes: report.file.size }, result: report });
+        const brief = { schema: report.schema, summary: report.summary, overview: report.overview, indicators: report.indicators.slice(0, 20), chains: report.capabilities.chains.map(({ id, strength, scope, libraryOnly }) => ({ id, strength, scope, libraryOnly })),
+          limitsHit: report.limitsHit, notRun: report.notRun };
+        return { result_id: record.id, kind: 'apk', action: 'apk', association, input: record.input, ...compactAnalysis(bindRefs(brief, record.id)),
+          note: 'Static analysis only; the sample was not executed. Read a section with action=result and select: manifest, permissions, signatures, dex, nativeLibraries, nestedPayloads, capabilities.rules, capabilities.chains, classes.listed, strings, indicators.' };
+      }
+      const output = args.action === 'unpack' ? path.join(cfg.artifactDir, 'firmware', randomUUID()) : undefined;
+      const report = await firmwareJobs.run({ action: args.action === 'unpack' ? 'extract' : 'scan', path: resolved, ...(output ? { output_dir: output } : {}), deadline_seconds: 300 }, signal);
+      mgr.checkCancelled();
+      trimListings(report.components, JSON.stringify(report).length > 6 * 1024 * 1024 ? 50 : Infinity);
+      const record = artifacts.save({ kind: 'firmware', action: args.action, association, input: { origin: { kind: 'file', path: resolved }, sha256: report.file.sha256, bytes: report.file.size }, result: report });
+      const brief = { schema: report.schema, file: report.file, summary: report.summary, outline: outline(report.components), limitsHit: report.limitsHit, notRun: report.notRun,
+        ...(report.extraction ? { extraction: { root: report.extraction.root, files: report.extraction.files, bytes: report.extraction.bytes, skipped: report.extraction.skipped.length } } : {}) };
+      return { result_id: record.id, kind: 'firmware', action: args.action, association, input: record.input, ...compactAnalysis(bindRefs(brief, record.id)),
+        note: 'Static analysis only; nothing was executed. Extraction (action=unpack) writes sanitized names under the reported root and creates no links or devices. Read details with action=result and select: components, summary, extraction.items.' };
+    },
     async execute(kind, args) {
       mgr.checkCancelled();
+      if (kind === 'package') return this.executePackage(args);
       if (args.action === 'result') {
         if (args.recovery !== undefined || args.inference !== undefined || args.state_model !== undefined) fail('INVALID_INPUT', 'Recovery and inference options are not used when reading a report');
         if (kind === 'protocol' && (args.offset !== undefined || args.length !== undefined)) fail('INVALID_INPUT', 'Byte ranges are not used when reading a report');
@@ -270,7 +326,7 @@ export function createAnalysisService(mgr, cfg) {
       const record = artifacts.save({ kind, action: args.action, association, input: { ...inputRef, origin: captured.origin }, output: outputRef, ...(keySource ? { keySource } : {}), result });
       return { result_id: record.id, kind, action: args.action, association, input: bindRefs(record.input, record.id), output: bindRefs(outputRef, record.id), ...(keySource ? { keySource } : {}), ...compactAnalysis(bindRefs(result, record.id)), note: 'Data-only analysis; no sample execution or database mutation. Recovery and inferred fields are bounded candidates; use explicit verification or independent holdout evidence before accepting them. Producer-marked sensitive key refs cannot be ordinary analysis input. Unbound refs and explicit local files retain raw data access; this preview guard is not a local secret access-control boundary.' };
     },
-    dispose: async () => { await jobs.dispose(); await artifacts.dispose(); },
+    dispose: async () => { await jobs.dispose(); await apkJobs.dispose(); await firmwareJobs.dispose(); await artifacts.dispose(); },
   };
 }
 
@@ -282,6 +338,10 @@ export function defineAnalysisTools(mgr, cfg, render) {
     tool('ig5_crypto', 'crypto', 'Inspect, decrypt XOR/AES-CBC/CTR/GCM, decompress or verify bounded bytes. action=recover searches bounded single/repeating XOR keys and validates supplied/extracted AES candidates; it does not exhaust strong AES key spaces. Candidate keys are sensitive SHA-256 refs; transform recipe.key_ref reuses a complete recover candidate without exposing key bytes. Producer-marked sensitive refs are rejected as ordinary input; unbound refs/local files keep raw access and are not a secret access-control boundary. Explicit expected or GCM authentication distinguishes verified plaintext from statistical guesses. No sample execution or database write. action=result reads a prior report.', {
       action: { type: 'string', enum: ['inspect', 'transform', 'recover', 'verify', 'result'] }, offset: { type: 'number' }, length: { type: 'number' }, output_limit: { type: 'number' }, expected: bytesProperty, recovery: recoveryProperty,
       recipe: { type: 'object', properties: { kind: { type: 'string', enum: ['xor', 'aes-cbc', 'aes-ctr', 'aes-gcm', 'gzip', 'zlib'] }, key: bytesProperty, key_ref: keyRefProperty, iv: bytesProperty, tag: bytesProperty, aad: bytesProperty, padding: { type: 'string', enum: ['none', 'pkcs7'] }, key_offset: { type: 'number', description: 'Explicit repeating XOR key start offset' } }, required: ['kind'], additionalProperties: false },
+    }),
+    tool('ig5_package', 'package', "Static front end for packaged samples given as a local file path (input={path}). action=apk: Android APK - ZIP container, binary manifest (permissions, components with effective exported state), signing certificates (identified, not verified), every classes*.dex scanned per method for capability call sites with class/method evidence, native libraries, nested or disguised payloads, high-entropy assets, URLs/IPs with the loading method. action=firmware: validated container inventory of a flash/firmware image (SquashFS, ext2/3/4, cpio, tar, zip, gzip/xz/bzip2/lzma/zlib, U-Boot/FIT, Android boot/sparse, TRX; JFFS2/UBI/UBIFS/CramFS/ROMFS identified only), compressed payloads opened recursively, file tables, interesting files, ELF architectures, kernel/BusyBox banners. action=unpack: firmware plus sanitized extraction under the returned root (no links or devices, size/count/depth budgets). Findings are leads with locations and limits. action=result reads sections of a saved report with select (apk: manifest, signatures, dex, capabilities.rules, indicators; firmware: components, summary, extraction.items). No sample execution, no network, no engine session.", {
+      action: { type: 'string', enum: ['apk', 'firmware', 'unpack', 'result'] },
+      input: { type: 'object', properties: { path: { type: 'string', description: 'Explicit local file; read-only, size and entry budgets enforced' } }, required: ['path'], additionalProperties: false },
     }),
     tool('ig5_protocol', 'protocol', 'Inspect bytes, parse PCAP/PCAPNG, reassemble directions, decode schemas or infer bounded framing/field hypotheses. state_infer consumes a <=1 MiB JSON manifest {version:1,traces:[{id,start:"session-start"|"unknown",complete:boolean,events:[{direction:"client_to_server"|"server_to_client",symbol,sourceId?,complete?}]}],holdout?:[]} through the existing input path/ref/bytes. It builds an observed prefix tree and optional future-equivalence merge hypothesis. state_validate replays new manifest.traces against state_model.result_id; reports accepted/rejected/unknown, overlap and counterexamples separately from training. Explicit session boundaries are required; TCP does not establish them. Models do not prove hidden server state, semantic meanings or complete protocol behavior. No network sends or sample execution. action=result reads a saved report; use select=state.holdout or state.observedModel.states.0 for bounded detail.', {
       action: { type: 'string', enum: ['inspect', 'capture', 'decode', 'infer', 'state_infer', 'state_validate', 'result'] }, offset: { type: 'integer', minimum: 0, description: 'Relative input-byte offset; capture the bounded full source first, then select this range. Useful with infer candidate.decodeInput.startOffset.' }, length: { type: 'integer', minimum: 0, description: 'Selected byte length; preserve skipped prefix/tail in the source reference. Useful with infer candidate.decodeInput.byteLength.' }, max_packets: { type: 'number' }, max_frames: { type: 'number' }, max_reassembly_bytes: { type: 'number' }, inference: inferenceProperty, state_model: stateModelProperty,

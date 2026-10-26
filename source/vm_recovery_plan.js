@@ -1,8 +1,9 @@
 import { RECOVERY_LIMITS, RECOVERY_STAGES, RECOVERY_FAILURES, recoveryBinding, recoveryDigest,
   recoveryObservationBinding, recoveryError, validateRecoveryCase } from './vm_recovery_case.js';
+import { routeFailure } from './failure_router.js';
 
 const stageActions = Object.freeze({
-  admission: ['establish-case-and-contract', ['producer/version/configuration provenance', 'target identity', 'independent function contract'], ['ig5_profile', 'ig5_open']],
+  admission: ['establish-case-and-contract', ['producer/version/configuration provenance', 'target identity', 'independent function contract'], ['ig5_recovery', 'ig5_open']],
   capture: ['collect-phase-bound-observations', ['run/thread/address-space identity', 'phase and code epochs', 'entry/return and ordered state observations'], ['ig5_dbg', 'ig5_ir level=trace']],
   vm_model: ['infer-and-test-vm-roles', ['VIP/VSP/context/key candidates with origins', 'fetch/dispatch/exit relations', 'competing hypotheses and counterexamples'], ['ig5_ir level=discover', 'ig5_ir level=project', 'ig5_ir level=compose']],
   isa: ['derive-and-verify-handler-families', ['complete input/output and ordered memory effects', 'flags/aliases/guards/side exits', 'independent equivalence obligations'], ['ig5_ir level=project', 'ig5_ir level=compose', 'ig5_ir level=trace']],
@@ -131,7 +132,7 @@ export function planVmRecovery(input, referenceChecks = []) {
     const original = value.events.find(event => event.id === stage.latestEvent);
     const event = original && evaluated.get(original.id);
     if (event && !event.invalidReasons.length && original.failure) {
-      add(stage.stage, event.repeatedWithoutNewInputs >= 2 ? 'design-discriminating-experiment' : RECOVERY_FAILURES[original.failure.code][1],
+      add(stage.stage, routeFailure({ failureCode: original.failure.code }, event.repeatedWithoutNewInputs).nextCheck,
         event.repeatedWithoutNewInputs >= 2 ? 'Same failure, hypothesis and inputs repeated; select a different testable hypothesis' : original.failure.code,
         original.failure.code === 'CLEANUP_UNCONFIRMED' ? 0 : 3, original);
       continue;

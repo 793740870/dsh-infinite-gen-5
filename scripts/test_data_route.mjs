@@ -1,3 +1,8 @@
+import { installReadOnlyDataRoute } from '../source/read_only_data_route.js';
+import { memorySchema } from '../source/lcm_bridge.js';
+import { runKnowledge, knowledgeSchema } from '../source/knowledge_catalog.js';
+import { planningRequestKey } from '../source/planning_identity.js';
+import { failureBinding } from '../source/failure_adapters.js';
 // Exercise the actual route with a mocked Cordis context and worker manager.
 // No engine process, database, or user artifact is opened or changed.
 import assert from 'node:assert/strict';
@@ -33,10 +38,18 @@ const cfg = {
   defaultEngine: 'reverse',
   projectRoot: 'C:\\unused-test-projects',
 };
-const errorStart = source.indexOf('function publicEngineError(');
-const errorEnd = source.indexOf('// ── Worker 池', errorStart);
-assert.ok(errorStart >= 0 && errorEnd > errorStart, 'error redaction must be present');
-const publicEngineError = vm.runInNewContext(source.slice(errorStart, errorEnd) + '\npublicEngineError;');
+// publicEngineError 现位于 source/engine_error.js;旧安装副本回退到从 index.js 文本切片。
+const engineErrorModule = new URL('../source/engine_error.js', import.meta.url);
+let publicEngineError;
+if (fs.existsSync(engineErrorModule)) {
+  ({ publicEngineError } = await import(engineErrorModule.href));
+  assert.equal(typeof publicEngineError, 'function', 'error redaction must be exported');
+} else {
+  const errorStart = source.indexOf('function publicEngineError(');
+  const errorEnd = source.indexOf('// ── Worker 池', errorStart);
+  assert.ok(errorStart >= 0 && errorEnd > errorStart, 'error redaction must be present');
+  publicEngineError = vm.runInNewContext(source.slice(errorStart, errorEnd) + '\npublicEngineError;');
+}
 const diagnostic = `license unavailable: ${cfg.pythonExe}; ${cfg.idaDir}; IDA Professional 9.2; idalib 9.2; Hex-Rays decompiler v9.2`;
 function assertRedacted(message) {
   assert.match(message, /license unavailable/);
@@ -52,7 +65,7 @@ const end = source.indexOf('function formatProgress(', start);
 assert.ok(start >= 0 && end > start, 'data route implementation must be present');
 const installDataRoute = vm.runInNewContext(
   source.slice(start, end) + '\ninstallDataRoute;',
-  { URL, path, fs: { existsSync: () => false }, publicEngineError, diagAppend() {} },
+  { installReadOnlyDataRoute, publicEngineError, diagAppend() {} },
 );
 
 function makeRoute(active = true) {
@@ -101,6 +114,11 @@ function makeRoute(active = true) {
 }
 
 const route = makeRoute();
+for (const action of ['case-status','case-index','case-search','case-read','method-registry','method-applicability','experiment-shadow','candidate-prepare','candidate-verify','candidate-read','candidate-simplify','cff-overlay','cff-read','cff-state']) {
+  assert.equal((await route.request('?type=investigation&action='+action)).status,400,'HTTP cannot access private task index');
+  assert.equal((await route.request('?type='+action)).status,400,'No new private HTTP type');
+  assert((await route.request('?type=knowledge&action='+action)).body.error,'Public knowledge cannot access private records');
+}
 for (const type of [
   'undo', 'dbg', 'open', 'rename', 'patch', 'comment', 'analyze', 'set_type',
   'idapython', 'doctor', 'ping', 'fileoffset', 'unknown', '__proto__', 'constructor',
@@ -159,9 +177,15 @@ assert.equal(route.calls.length, beforeApprovals, 'approvals are read locally');
 const auditScratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ig5-data-audit-'));
 try {
   const auditCfg = { ...cfg, artifactDir: auditScratch, defaultEngine: 'ghidra' };
-  const gateStart = source.indexOf('const IG5_WRITE_TOOLS');
-  const gateEnd = source.indexOf('// ── M1-C', gateStart);
-  const installApprovalGate = vm.runInNewContext(source.slice(gateStart, gateEnd) + '\ninstallApprovalGate;', { fs, path, diagAppend() {} });
+  let installApprovalGate;
+  const gateModule = new URL('../source/approval_gate.js', import.meta.url);
+  if (fs.existsSync(gateModule)) {
+    ({ installApprovalGate } = await import(gateModule.href));
+  } else {
+    const gateStart = source.indexOf('const IG5_WRITE_TOOLS');
+    const gateEnd = source.indexOf('// ── M1-C', gateStart);
+    installApprovalGate = vm.runInNewContext(source.slice(gateStart, gateEnd) + '\ninstallApprovalGate;', { fs, path, diagAppend() {} });
+  }
   const events = new Map();
   installApprovalGate({ on(name, callback) { events.set(name, callback); } }, auditCfg);
   const auditTarget = path.join(auditScratch, 'sample.exe');
@@ -189,7 +213,7 @@ try {
     sessions: new Map(auditSessions.map(session => [sessionKey(session.target, session.engine), session])),
     rpc() { auditWorkerCalls++; throw new Error('audit view must not enter any worker'); },
   };
-  const auditRoute = vm.runInNewContext(source.slice(start, end) + '\ninstallDataRoute;', { URL, path, fs, readAuditPage, publicEngineError, diagAppend() {} });
+  const auditRoute = vm.runInNewContext(source.slice(start, end) + '\ninstallDataRoute;', { installReadOnlyDataRoute, publicEngineError, diagAppend() {} });
   auditRoute({ inject(_names, callback) { callback({ webServer: { register(spec) { auditHandler = spec.handler; } } }); } }, auditManager, auditCfg);
   async function auditRequest(engine) {
     return new Promise((resolve, reject) => {
@@ -293,6 +317,21 @@ for (const type of ['analyses', 'analysis_result', 'approvals', 'debug_state']) 
 assert.equal(independent.calls.length, 0);
 console.log('Data admission snapshots: matching static reads, all eight identity mismatches, invalid context, prior reopen/revision, and pre-RPC change passed.');
 
+// 写工具清单与实现标识已分别移到 source/approval_gate.js、source/implementation_info.js;旧副本回退到文本切片。
+async function writeToolsSet() {
+  const m = new URL('../source/approval_gate.js', import.meta.url);
+  if (fs.existsSync(m)) return (await import(m.href)).IG5_WRITE_TOOLS;
+  return vm.runInNewContext(source.slice(source.indexOf('const IG5_WRITE_TOOLS'), source.indexOf('function installApprovalGate')) + '\nIG5_WRITE_TOOLS;');
+}
+async function implementationRevision() {
+  const m = new URL('../source/implementation_info.js', import.meta.url);
+  if (fs.existsSync(m)) return (await import(m.href)).IMPLEMENTATION_REVISION;
+  return /const IMPLEMENTATION_REVISION = '([^']+)'/.exec(source)[1];
+}
+
+const WRITE_TOOLS = await writeToolsSet();
+const REVISION = await implementationRevision();
+
 // Evaluate the actual tool definitions with a fake child process; doctor must
 // filter the worker result before both execute() and output.render() expose it.
 const toolsStart = source.indexOf('function textRender(');
@@ -301,8 +340,12 @@ assert.ok(toolsStart >= 0 && toolsEnd > toolsStart, 'tool definitions must be pr
 const defineIg5Tools = vm.runInNewContext(
   source.slice(toolsStart, toolsEnd) + '\ndefineIg5Tools;',
   { path, fs, publicEngineError, defineAdvancedTools, defineIntegrationTools, defineAnalysisTools, defineCaptureTools: () => [], doctorWorker,
-    collectFunctionDossier, workspaceSchema, runWorkspace, captureDossier, recoveryProfileSchema, runRecoveryProfile, autonomyStatus,
-    IG5_WRITE_TOOLS: vm.runInNewContext(source.slice(source.indexOf('const IG5_WRITE_TOOLS'), source.indexOf('function installApprovalGate')) + '\nIG5_WRITE_TOOLS;'),
+    collectFunctionDossier, workspaceSchema, runWorkspace, captureDossier, recoveryProfileSchema, runRecoveryProfile, autonomyStatus, runKnowledge,
+    IG5_WRITE_TOOLS: WRITE_TOOLS,
+    IMPLEMENTATION_REVISION: REVISION,
+    // Deterministic diagnostic fixture: a real millisecond suffix such as 49.253
+    // otherwise accidentally matches the commercial-version redaction assertion /9\.2/.
+    IMPLEMENTATION_LOADED_AT: '2026-10-24T00:00:00.000Z',
     PLUGIN_ID: 'dsh-infinite-gen-5', PLUGIN_VERSION: '1.0.0', setTimeout, clearTimeout },
 );
 let killed = false;
@@ -340,7 +383,7 @@ const mockManager = {
   },
 };
 const definitions = defineIg5Tools({}, mockManager, cfg);
-assert.equal(definitions.length, 38);
+assert.equal(definitions.length, 41);
 for (const definition of definitions) {
   assert.doesNotMatch(definition.description, /\bIDA\b|IDAPython|idalib|Hex-Rays|ida_[a-z]/i);
 }
@@ -364,12 +407,25 @@ for (const mode of ['workerError', 'spawnThrow', 'spawnError']) {
   doctorMode = mode;
   await assert.rejects(definitions.find((value) => value.name === 'ig5_doctor').execute({}), (error) => assertRedacted(error.message));
 }
-const workerStart = source.indexOf('class WorkerManager');
-const workerEnd = source.indexOf('// ── 诊断回路', workerStart);
+// WorkerManager 现位于 source/worker_manager.js:去掉 import / HERE / export 后与旧方式一样在 VM 内注入伪造依赖;
+// 旧安装副本(无该文件)回退到从 index.js 文本切片。
+function workerManagerSource() {
+  const file = new URL('../source/worker_manager.js', import.meta.url);
+  if (fs.existsSync(file)) {
+    return fs.readFileSync(file, 'utf8').split(/\r?\n/)
+      .filter((line) => !line.startsWith('import ') && !line.startsWith('const HERE = '))
+      .join('\n').replace('export class WorkerManager', 'class WorkerManager');
+  }
+  const workerStart = source.indexOf('class WorkerManager');
+  const workerEnd = source.indexOf('// ── 诊断回路', workerStart);
+  return source.slice(workerStart, workerEnd);
+}
 let workerMode = 'success';
 let releaseOpening, openingArrived, writesDuringOpening = 0;
 let exchangeChild;
 const workerContext = {
+  IMPLEMENTATION_REVISION: REVISION,
+  IMPLEMENTATION_LOADED_AT: new Date().toISOString(),
   AsyncLocalStorage, engineId, attachWorker, doctorWorker,
   HERE: fileURLToPath(new URL('..', import.meta.url)),
   spawnWorker: (cfg, engine, root, options) => spawnWorker(cfg, engine, root, { ...options, spawnProcess: (...args) => workerContext.spawn(...args) }),
@@ -434,7 +490,7 @@ const workerContext = {
     return child;
   },
 };
-const WorkerManager = vm.runInNewContext(source.slice(workerStart, workerEnd) + '\nWorkerManager;', workerContext);
+const WorkerManager = vm.runInNewContext(workerManagerSource() + '\nWorkerManager;', workerContext);
 const producerManager = new WorkerManager(cfg);
 const producerEvidence = producerManager.evidence({ target: 'C:\\fixtures\\inferred.exe', engine: 'ghidra', artifactId: 'sample-identity' });
 assert.equal(producerEvidence.target, 'C:\\fixtures\\inferred.exe', 'executed evidence must retain the inferred target independent of AI arguments');
@@ -587,10 +643,14 @@ console.log('Data exchange snapshots: ordinary complete evidence, both stdout ba
 // bypassed in a running host. JSON serialization only bridges these VM realms.
 function wrappedTools(mgr) {
   let wrapped;
-  const apply = vm.runInNewContext(source.slice(source.indexOf('export function apply(')).replace('export function apply(', 'function apply(') + '\napply;', {
+  const apply = vm.runInNewContext(source.slice(source.indexOf('export function apply(')).replace('export function apply(', 'function apply(').replaceAll('import.meta.url', JSON.stringify(new URL('../index.js', import.meta.url).href)) + '\napply;', {
+    IMPLEMENTATION_REVISION: REVISION,
+    fileURLToPath, memorySchema, knowledgeSchema, planningRequestKey, failureBinding,
+    diagAppend() {}, installLcmBridge: () => ({ async activate() {}, async dispose() {} }),
+    installDelegationControl: () => ({ charge() {} }),
     resolveConfig: () => cfg, WorkerManager: class { constructor() { return mgr; } },
     installDiagRoute() {}, installJobsRoute() {}, installDataRoute() {}, installApprovalGate() {},
-    defineIg5Tools, IG5_WRITE_TOOLS: vm.runInNewContext(source.slice(source.indexOf('const IG5_WRITE_TOOLS'), source.indexOf('function installApprovalGate')) + '\nIG5_WRITE_TOOLS;'),
+    defineIg5Tools, IG5_WRITE_TOOLS: WRITE_TOOLS,
     PLUGIN_ID: 'dsh-infinite-gen-5', engineId, publicEngineError,
     jsonToolOutput: value => JSON.parse(JSON.stringify(value)),
     installWorkflow(_ctx, options) { wrapped = options.definitions; return { async dispose() {} }; },
@@ -613,6 +673,9 @@ for (const expectedRevision of [undefined, 0]) {
   const queued = comment.execute({ target: 'C:\\fixtures\\sample.exe', ea: '0x1000', text: 'planned for old attachment',
     ...(expectedRevision === undefined ? {} : { expected_revision: expectedRevision }) }, { agent: { id: 'queue-fixture' } });
   const queuedRejected = assert.rejects(queued, { code: 'STALE_SESSION_CONTEXT' });
+  // LCM activation now yields before selecting the attachment. Wait until this
+  // call has entered the old session queue before replacing that session.
+  await new Promise(setImmediate);
   queueManager.killSession(oldSession.key);
   const reopening = queueManager.open('C:\\fixtures\\sample.exe');
   await predecessorRejected; await queuedRejected; await reopening;

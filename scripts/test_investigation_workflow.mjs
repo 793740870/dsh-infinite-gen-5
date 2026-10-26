@@ -39,8 +39,8 @@ function fixture(t) {
   const sha256 = hash('synthetic fixture bytes');
   const context = { target, projectId: `project_${randomUUID()}`, artifactId: `artifact_${sha256}`, sha256,
     engine: 'reverse', provider: 'ghidra', attachmentId: `attachment_${randomUUID()}`, dbRevision: 3 };
-  const session = { engine: 'reverse', target, alive: true }, execution = { agent: { id: 'fixture-agent' } };
-  const mgr = { analysis: { artifacts }, get(selected) { return selected === target ? session : undefined; },
+  const session = { engine: 'reverse', target, alive: true, capabilities: ['decompile'] }, execution = { agent: { id: 'fixture-agent' } };
+  const mgr = { analysis: { artifacts }, sessions: new Map([[target, session]]), engines: () => [{ id: 'reverse', provider: 'ghidra', available: true }], get(selected) { return selected === target ? session : undefined; },
     alive(value) { return value?.alive === true; }, evidence() { return { ...context }; }, checkCancelled() {
       if (mgr.cancelled) throw Object.assign(new Error('IG5 fixture cancelled'), { code: 'ABORT_ERR' });
     } };
@@ -56,6 +56,49 @@ function fixture(t) {
   const recordFiles = () => fs.readdirSync(path.join(artifacts.root, 'records')).filter(file => file.endsWith('.json'));
   return { root, cfg, context, session, execution, mgr, artifacts, workspace, create, capture, recordFiles };
 }
+
+test('workspace brief restores a reopened investigation without engine calls or modifying task state', t => {
+  const f = fixture(t), task = f.create(), captured = f.capture(task.taskId);
+  f.context.attachmentId = `attachment_${randomUUID()}`;
+  f.context.dbRevision++;
+  f.mgr.rpc = () => { throw new Error('brief cannot perform native reads'); };
+  const before = f.workspace({ action: 'get', id: task.taskId });
+  const result = f.workspace({ action: 'brief', id: task.taskId });
+  assert.equal(result.staleEvidence[0].snapshotId, captured.snapshotId);
+  assert.deepEqual(result.staleEvidence[0].reasons, ['attachment-changed', 'database-revision-changed']);
+  assert.equal(result.observations.length, 0);
+  assert.equal(result.nextExperiments[0].request.ea, '0x140001000');
+  assert.equal(result.nextExperiments[0].request.task_id, task.taskId);
+  assert.equal(result.evidenceRefs[0].reportIntegrity, 'verified');
+  assert.equal(result.historyNavigation.fullRef.action, 'resume');
+  const resume = f.workspace({ action: 'resume', id: task.taskId });
+  assert.equal(resume.gaps[0].kind, 'stale-evidence');
+  assert.equal(resume.gaps[0].search.memory.query, `"${captured.reportId}"`);
+  assert.equal(resume.gaps[0].currentRead.workspace.snapshot_id, captured.snapshotId);
+  assert.equal(resume.executionAuthorized, false);
+  assert.equal(resume.checkpointAdvice.automaticSave, false);
+  failure(() => f.workspace({ action: 'resume', id: task.taskId, auto_execute: true }), 'INVALID_ARGUMENT');
+  assert.deepEqual(f.workspace({ action: 'get', id: task.taskId }), before);
+  failure(() => f.workspace({ action: 'brief', id: task.taskId, goal: 'not writable' }), 'INVALID_ARGUMENT');
+});
+test('workspace plan is a bounded consistent read, preserves task/report bytes, and rejects execution flags', t => {
+  const f = fixture(t), task = f.create(), captured = f.capture(task.taskId);
+  f.mgr.rpc = () => { throw Error('Planning cannot call a native engine'); };
+  const before = f.workspace({ action: 'get', id: task.taskId });
+  const reportFile = path.join(f.artifacts.directory('records'), captured.reportId + '.json'), bytes = fs.readFileSync(reportFile);
+  const plan = f.workspace({ action: 'plan', id: task.taskId, max_bytes: 4096 });
+  assert.equal(plan.schema, 'ig5-experiment-plan-v1'); assert.equal(plan.mode, 'suggestions-only');
+  assert(plan.candidates.some(c => c.kind === 'read-complete-evidence'));
+  assert.equal(plan.executionAuthorized, false); assert(Buffer.byteLength(JSON.stringify(plan)) <= 4096);
+  assert.deepEqual(f.workspace({ action: 'get', id: task.taskId }), before); assert.deepEqual(fs.readFileSync(reportFile), bytes);
+  assert.equal(f.recordFiles().length, 1);
+  failure(() => f.workspace({ action: 'plan', id: task.taskId, auto_execute: true }), 'INVALID_ARGUMENT');
+  failure(() => f.workspace({ action: 'plan', id: task.taskId, max_bytes: 4095 }), 'INVALID_ARGUMENT');
+  f.context.dbRevision++;
+  assert(f.workspace({ action: 'plan', id: task.taskId }).candidates.some(c => c.kind === 'refresh-stale-dossier'));
+  f.mgr.evidence = () => ({ ...f.context, dbRevision: f.context.dbRevision++ });
+  failure(() => f.workspace({ action: 'plan', id: task.taskId }), 'SNAPSHOT_INCONSISTENT');
+});
 
 test('handoff and cross-agent review bind task revisions and validate evidence without completing work', t => {
   const f = fixture(t), task = f.create(), captured = f.capture(task.taskId);

@@ -12,7 +12,7 @@
 
 ## 证据位置
 
-根目录：`C:\Users\Administrator\.dsh\ig5\artifacts\modern-protection-20261014`。
+根目录：`C:\Users\IG5User\.dsh\ig5\artifacts\modern-protection-20261014`。
 
 - `intake.json`：清单与真实严格 PE loader，未执行目标。
 - `generated-vmp311`／`generated-vmp311-harness`／`compiled-vmp311`：原输入、保护输出、完整生成配置与日志、generation receipt。

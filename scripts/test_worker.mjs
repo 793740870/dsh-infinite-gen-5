@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(here, '..');
 const WORKER = path.join(pluginRoot, 'worker', 'ig5_worker.py');
-const IDA_DIR = process.env.IG5_IDA_DIR || 'C:\\Users\\Administrator\\Desktop\\IDA Professional 9.2';
+const IDA_DIR = process.env.IG5_IDA_DIR || 'C:\\Users\\IG5User\\Desktop\\IDA Professional 9.2';
 const PYTHON = process.env.IG5_PYTHON || path.join(IDA_DIR, 'python311', 'python.exe');
 const input = process.argv[2] || path.join(pluginRoot, '..', '_research', 'fixtures', 'notepad.exe');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ig5-worker-'));

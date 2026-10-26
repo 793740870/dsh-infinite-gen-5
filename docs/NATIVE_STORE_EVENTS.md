@@ -22,7 +22,7 @@ P1可选采集仍由原`ig5_dbg`公共一次审批控制：
 
 sidecar+raw共享原1MiB证据预算，每指令最多32位置/256字节。单步前预留最大事件空间，不足时以`recording-evidence-budget`保留前缀，不执行下一步。512确认停止/40秒和8MiB初始映像不扩。窗口连接仍核对完整末/初态，最多256段/16MiB/默认50k、显式100k指令；16MiB包含sidecar。
 
-保存前核对摘要、严格compact ASCII JSON、完整trace身份及停止关系，再保存SHA blob与报告引用。`ig5_profile recovery.observations`重验全部事件后分页，memoryWrites状态为decoded-locations-observed-across-stop；旧记录继续not-recorded-by-this-format。后段损坏即使不在返回页也拒绝。phase保持unclassified，模块/内存epoch保持null，VM/ISA/业务/覆盖均未升级。
+保存前核对摘要、严格compact ASCII JSON、完整trace身份及停止关系，再保存SHA blob与报告引用。`ig5_recovery recovery.observations`重验全部事件后分页，memoryWrites状态为decoded-locations-observed-across-stop；旧记录继续not-recorded-by-this-format。后段损坏即使不在返回页也拒绝。phase保持unclassified，模块/内存epoch保持null，VM/ISA/业务/覆盖均未升级。
 
 `npm run test:store-events`覆盖Python采集器、真实解码+模拟原生停止、JS解析/保存和实际数据worker。模拟停止不是原生验收。显式原生回归另用：
 

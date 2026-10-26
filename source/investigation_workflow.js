@@ -1,17 +1,54 @@
+import {cffActions,validateCffInput,runCffWorkflow} from './cff_workflow.js';
+import { investigationResume } from './investigation_resume.js';
+import { caseIndexActions, runCaseIndex, validateCaseIndexInput } from './research_case_bridge.js';
+import { methodActions, runMethodQuery, validateMethodInput } from './method_applicability.js';
+import { runExperimentShadow, validateShadowInput } from './experiment_shadow.js';
+import { candidateActions, validateCandidateInput, runCandidateWorkflow, bitvectorASTSchema } from './candidate_workflow.js';
+import { LiftJobs } from './lift_jobs.js';
 import { InvestigationStore } from './investigation_store.js';
+import { planningContext, investigationPlan } from './investigation_planning.js';
 import { jsonToolOutput } from './json_output.js';
+import { capabilityCatalog } from './capability_catalog.js';
+import { investigationBrief } from './investigation_brief.js';
+import { validateSnapshotReport } from './evidence_adapters/dossier.js';
+import { ResearchState, researchScopeDigest, researchMutationSchema, researchDigest, validateResearchMutation } from './research_state.js';
+import { linkDossierEvidence, inspectResearchEvidence } from './evidence_registry.js';
+import { evidenceDependencies } from './evidence_dependencies.js';
+import { vmContextEvidence, exactReportRef } from './evidence_adapters/vm_context.js';
+import { fixedPropertyEvidence } from './evidence_adapters/fixed_properties.js';
+import { verifyResearch, verificationOverlay, loadVerification, readVerificationReport, verificationRequestSchema, validateVerificationRequest } from './verification_registry.js';
 
 export const workspaceSchema = {
-  description: 'Static investigation notes and evidence. Before DSH delegation, read the task then use handoff with current expected_task_revision, question, acceptance and constraints. Send its packet to the child. Child checks target/engine/revision, relevant architecture and complete evidence, then returns candidates and snapshot IDs. Parent uses review to verify 1..8 task snapshots; semantic acceptance remains independent. No agent spawning, permission grants or automatic completion.',
+  description: 'Static investigation notes and evidence. research-get returns current scopeDigest and independent researchRevision. research-update requires both task/research revisions; link-vm-context accepts only committed report_ref UUID/SHA. link-verifier-evidence accepts committed fixed function/recorded-source reports; research-verify runs the registered bounded property verifier; research-link-verification recovers its saved result after CAS conflict. A narrow pass never accepts the whole contract. Before DSH delegation, read the task then use handoff with current expected_task_revision, question, acceptance and constraints. Child reads exact task evidence; parent reviews returned snapshot IDs. No agent spawning, permission grants or automatic completion.',
   type: 'object', properties: {
-    action: { type: 'string', enum: ['create', 'get', 'list', 'update', 'evidence', 'handoff', 'claim', 'submit', 'review'] },
+    action: { type: 'string', enum: ['create', 'get', 'brief', 'list', 'update', 'evidence', 'handoff', 'claim', 'submit', 'review', 'plan', 'resume', 'research-get', 'research-update', 'research-dependencies', 'research-verify', 'research-link-verification', 'research-verification', ...caseIndexActions, ...methodActions, 'experiment-shadow', ...candidateActions, ...cffActions] },
+    source_ref: { type:'object',properties:{id:{type:'string'},sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['id','sha256'],additionalProperties:false },
+    verification_ref: { type:'object',properties:{id:{type:'string'},sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['id','sha256'],additionalProperties:false },
+    candidate_ref: { type:'object',properties:{id:{type:'string'},sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['id','sha256'],additionalProperties:false },
+    root_node: { type:'integer',minimum:0,maximum:2047,description:'candidate-prepare: selected pure root in the complete committed preferred-address projection' },
+    candidate_ast: bitvectorASTSchema,
+    premise: bitvectorASTSchema,
+    mode: { type: 'string', enum: ['off','shadow'], description: 'experiment-shadow only; off returns the original plan, shadow adds independent suggestions; assist unavailable' },
+    method_id: { type: 'string', maxLength: 64, description: 'method-applicability: exact fixed method ID from method-registry; read only, never executes a template' },
+    query: { type: 'string', minLength: 1, maxLength: 256, description: 'case-search only; explicit current-task private index query' },
+    ref: { type: 'object', properties: { id: { type: 'string', maxLength: 64 }, sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' } }, required: ['id','sha256'], additionalProperties: false },
+    generation: { type: 'string', description: 'case-search/read: optional exact private generation' },
+    expected_generation: { type: 'string', description: 'case-index: exact current generation, or absent' },
+    expected_research_revision: { type: 'integer', minimum: 0, description: 'case-index: current research revision' },
+    research: researchMutationSchema,
+    verification: verificationRequestSchema,
+    report_ref: { type: 'object', properties: { id: { type: 'string' }, sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' } }, required: ['id', 'sha256'], additionalProperties: false },
+    verification_id: { type: 'string', description: 'Committed verification report UUID already linked to this task' },
+    evidence_id: { type: 'string', description: 'research-dependencies: linked evidence UUID in this task' },
+    max_bytes: { type: 'integer', minimum: 4096, maximum: 32768, description: 'brief/plan/resume only: UTF-8 JSON budget, default 12288' },
+    cursor: { type: 'string', description: 'brief or case-read continuation; bound to exact scope and revisions' },
     handoff_id: { type: 'string', description: 'Child claim/submit, parent post-return review: tracked handoffId. Review without it is integrity precheck only, never delegation acceptance.' },
     question: { type: 'string', maxLength: 2048, description: 'handoff: bounded delegated question; caller statement' },
     acceptance: { type: 'string', maxLength: 2048, description: 'handoff: explicit acceptance criteria; text only, never executed' },
     constraints: { type: 'string', maxLength: 2048, description: 'handoff: responsibility and limits; advisory, not an access-control policy' },
     snapshot_ids: { type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: { type: 'string' }, description: 'review: task-bound system snapshots to revalidate; not a semantic completion verdict' },
     id: { type: 'string', description: 'Task UUID returned by create or list' },
-    snapshot_id: { type: 'string', description: 'System snapshot UUID from this task; evidence action only' },
+    snapshot_id: { type: 'string', description: 'System snapshot UUID from this task; evidence action or research-update link-evidence' },
     expected_task_revision: { type: 'number', description: 'Required for update: use the returned taskRevision, independent of the database revision' },
     goal: { type: 'string', maxLength: 4096 },
     hypothesis: { type: 'string', maxLength: 4096, description: 'Caller statement, not verified evidence; do not include secrets' },
@@ -23,6 +60,7 @@ export const workspaceSchema = {
 
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 function store(mgr, cfg) { return mgr.investigations ||= new InvestigationStore({ root: cfg.projectRoot }); }
+function research(mgr, cfg) { return mgr.researchState ||= new ResearchState({ root: cfg.projectRoot }); }
 function context(mgr, args) {
   if (typeof args.target !== 'string' || !args.target.trim()) fail('INVALID_ARGUMENT', 'workspace requires an explicit opened target');
   const session = mgr.get(args.target);
@@ -39,27 +77,154 @@ function fields(input, allowed) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_ARGUMENT', 'workspace must be an object');
   for (const name of Object.keys(input)) if (!allowed.includes(name)) fail('INVALID_ARGUMENT', `workspace field is not valid for this action: ${name}`);
 }
-function validateSnapshotReport(snapshot, report) {
-  const result = report?.result;
-  const keys = ['projectId', 'artifactId', 'sha256', 'engine', 'provider', 'attachmentId', 'dbRevision'];
-  if (report?.kind !== 'function-dossier' || result?.snapshotDigest !== snapshot.digest
-    || keys.some(key => report.association?.[key] !== snapshot.context[key] || result.provenance?.[key] !== snapshot.context[key] || result._ig5?.[key] !== snapshot.context[key])
-    || result.function?.ea !== snapshot.function.ea
-    || JSON.stringify(Object.keys(result.sections || {}).sort()) !== JSON.stringify([...snapshot.sections].sort())) {
-    fail('ARTIFACT_CHANGED', 'Stored report does not match the scope and function of this system observation');
-  }
-  if (snapshot.function.name !== undefined && (snapshot.function.nameTruncated
-    ? result.function.name?.slice(0, 256) !== snapshot.function.name : result.function.name !== snapshot.function.name)) {
-    fail('ARTIFACT_CHANGED', 'Stored report function name differs from the system observation');
-  }
-}
 
 /** Called under the selected session queue. This changes analysis notes only. */
 export function runWorkspace(mgr, cfg, args, execution) {
   if (args.toolset !== undefined || args.history !== undefined) fail('INVALID_ARGUMENT', 'Use workspace separately from toolset/history changes');
-  const scope = context(mgr, args), notes = store(mgr, cfg), input = args.workspace;
+  const input = args.workspace;
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_ARGUMENT', 'workspace must be an object');
   const { action, id } = input;
+  if (caseIndexActions.includes(action)) validateCaseIndexInput(input);
+  if (methodActions.includes(action)) validateMethodInput(input);
+  if (action === 'experiment-shadow') validateShadowInput(input);
+  if (candidateActions.includes(action)) validateCandidateInput(input);
+  if (cffActions.includes(action)) validateCffInput(input);
+  if (['plan', 'resume'].includes(action)) fields(input, ['action', 'id', 'max_bytes']);
+  if (action === 'research-update') validateResearchMutation(input.research);
+  if (['research-verify', 'research-link-verification'].includes(action)) validateVerificationRequest(input.verification);
+  const scope = context(mgr, args), notes = store(mgr, cfg);
+  if (candidateActions.includes(action)||cffActions.includes(action)) {
+    if (!execution?.agent?.id) fail('AGENT_SCOPE_REQUIRED','Candidate access requires the actual executing agent');
+    mgr.lifter ||= new LiftJobs(cfg);
+    const read=()=>{const current=context(mgr,args),task=notes.get(current,id);return {context:current,task,research:research(mgr,cfg).get(task,current)};};
+    const controller=new AbortController(),parent=execution?.signal||mgr.scope?.getStore()?.signal,cancel=()=>controller.abort();
+    if(parent?.aborted)cancel();else parent?.addEventListener('abort',cancel,{once:true});
+    const timer=setTimeout(cancel,Math.min(cfg.requestTimeoutMs||60000,60000));
+    const execute=cffActions.includes(action)?runCffWorkflow:runCandidateWorkflow;
+    return execute({artifacts:mgr.analysis.artifacts,jobs:mgr.lifter,dataJobs:mgr.analysis.jobs,input,read,signal:controller.signal})
+      .then(result=>({workspace:result})).catch(error=>{if(error.code==='UNSUPPORTED_BITVECTOR')return {workspace:{schema:'ig5-bitvector-unsupported-v1',status:'unsupported',reason:error.message,nativeTargetExecuted:false,businessAccepted:false,databaseModified:false,assistEnabled:false}};throw error;})
+      .finally(()=>{clearTimeout(timer);parent?.removeEventListener('abort',cancel);});
+  }
+  if (action === 'experiment-shadow') {
+    if (!execution?.agent?.id) fail('AGENT_SCOPE_REQUIRED', 'Shadow access requires the actual executing agent');
+    const read = () => {
+      const current=context(mgr,args),task=notes.get(current,id),state=research(mgr,cfg).get(task,current);
+      let failures=[],failureError=null;
+      try { failures=mgr.failures?.recent(current,3)||[]; } catch(error) { failureError=error.code||'FAILURE_HISTORY_UNAVAILABLE'; }
+      return {context:current,task,research:state,failures,failureError,relatedTasks:notes.list(current).tasks.filter(other=>other.taskId!==task.taskId)};
+    };
+    return {workspace:runExperimentShadow({projectRoot:cfg.projectRoot,input,read,artifacts:mgr.analysis.artifacts,
+      readPlanning:data=>planningContext({mgr,cfg,args,execution,context:data.context,task:data.task,research:verificationOverlay(mgr.analysis.artifacts,data.task,data.research)}),
+      readLegacy:()=>runWorkspace(mgr,cfg,{...args,workspace:{action:'plan',id,...(input.max_bytes!==undefined?{max_bytes:input.max_bytes}:{})}},execution).workspace,
+      readFailures:(keys,runtime)=>mgr.failures?.forPlanning?mgr.failures.forPlanning(context(mgr,args),keys,runtime):{records:[],completeHistory:false,error:'FAILURE_HISTORY_UNAVAILABLE'},
+    })};
+  }
+  if (methodActions.includes(action)) {
+    if (!execution?.agent?.id) fail('AGENT_SCOPE_REQUIRED', 'Method access requires the actual executing agent');
+    return { workspace: runMethodQuery({ projectRoot: cfg.projectRoot, input, artifacts: mgr.analysis.artifacts, read: () => {
+      const current = context(mgr, args), task = notes.get(current, id), state = research(mgr, cfg).get(task, current);
+      let failures = [], failureError = null;
+      try { failures = mgr.failures?.recent(current, 3) || []; } catch (error) { failureError = error.code || 'FAILURE_HISTORY_UNAVAILABLE'; }
+      return { context: current, task, research: state, failures, failureError, relatedTasks: notes.list(current).tasks.filter(other => other.taskId !== task.taskId) };
+    } }) };
+  }
+  if (caseIndexActions.includes(action)) {
+    return runCaseIndex({ projectRoot: cfg.projectRoot, input, execution, artifacts: mgr.analysis.artifacts, memory: mgr.memory,
+      read: () => {
+        const current = context(mgr, args), task = notes.get(current, id), state = research(mgr, cfg).get(task, current);
+        let failures = [], failureError = null;
+        try { failures = mgr.failures?.recent(current, 3) || []; } catch (error) { failureError = error.code || 'FAILURE_HISTORY_UNAVAILABLE'; }
+        return { context: current, task, research: state, failures, failureError,
+          relatedTasks: notes.list(current).tasks.filter(other => other.taskId !== task.taskId) };
+      } }).then(result => ({ workspace: result }));
+  }
+  if (['plan', 'resume'].includes(action)) {
+    fields(input, ['action', 'id', 'max_bytes']);
+    return { workspace: (action === 'resume' ? investigationResume : investigationPlan)({ maxBytes: input.max_bytes, read: () => {
+      const current = context(mgr, args), task = notes.get(current, id);
+      const state = verificationOverlay(mgr.analysis.artifacts, task, research(mgr, cfg).get(task, current));
+      return planningContext({ mgr, cfg, args, execution, context: current, task, research: state });
+    } }) };
+  }
+  if (action === 'research-get' || action === 'research-dependencies') {
+    fields(input, action === 'research-get' ? ['action', 'id'] : ['action', 'id', 'evidence_id']);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const currentScope = context(mgr, args), task = notes.get(currentScope, id), state = verificationOverlay(mgr.analysis.artifacts, task, research(mgr, cfg).get(task, currentScope));
+      if (action === 'research-dependencies') {
+        if (!state?.evidenceLinks.some(e => e.id === input.evidence_id)) fail('INVALID_RESEARCH_REF', 'Choose linked evidence from this research state');
+      }
+      const result = action === 'research-dependencies' ? evidenceDependencies(state, input.evidence_id)
+        : { taskId: id, taskRevision: task.taskRevision, scopeDigest: researchScopeDigest(task.scope),
+          research: state, evidence: state ? inspectResearchEvidence(mgr.analysis.artifacts, task, currentScope, state) : [],
+          initialized: state !== null, executionAuthorized: false };
+      const endScope = context(mgr, args), endTask = notes.get(endScope, id), endState = research(mgr, cfg).get(endTask, endScope);
+      if (task.taskRevision !== endTask.taskRevision || (state?.researchRevision ?? null) !== (endState?.researchRevision ?? null)
+        || researchDigest(currentScope) !== researchDigest(endScope)) continue;
+      return { workspace: result };
+    }
+    fail('SNAPSHOT_INCONSISTENT', 'Task, research or database changed during both research reads');
+  }
+  if (action === 'research-verify' || action === 'research-link-verification') {
+    fields(input, action === 'research-verify' ? ['action', 'id', 'verification'] : ['action', 'id', 'verification', 'report_ref']);
+    const task = notes.get(scope, id), service = research(mgr, cfg), state = service.get(task, scope), by = actor(execution);
+    return runResearchVerification(mgr, args, input, notes, service, task, state, by, execution?.signal);
+  }
+  if (action === 'research-verification') {
+    fields(input, ['action', 'id', 'verification_id']);
+    const task = notes.get(scope, id), state = research(mgr, cfg).get(task, scope);
+    const ref = state?.verificationRefs?.find(r => r.reportId === input.verification_id);
+    if (!ref) fail('INVALID_RESEARCH_REF', 'Verification report is not associated with this research');
+    return { workspace: { reportId: ref.reportId, sha256: ref.sha256, ...readVerificationReport(mgr.analysis.artifacts, task, state, ref) } };
+  }
+  if (action === 'research-update') {
+    fields(input, ['action', 'id', 'research', 'snapshot_id', 'report_ref']);
+    const task = notes.get(scope, id), service = research(mgr, cfg);
+    const vmLink = input.research?.operation === 'link-vm-context', dossierLink = input.research?.operation === 'link-evidence';
+    const fixedLink=input.research?.operation==='link-verifier-evidence';
+    const linking = vmLink || dossierLink || fixedLink;
+    if (!dossierLink && input.snapshot_id !== undefined) fail('INVALID_ARGUMENT', 'snapshot_id is only valid for link-evidence');
+    if (!vmLink && !fixedLink && input.report_ref !== undefined) fail('INVALID_ARGUMENT', 'report_ref is only valid for a fixed research evidence link');
+    const evidence = dossierLink ? linkDossierEvidence(mgr.analysis.artifacts, task, input.snapshot_id)
+      : vmLink ? vmContextEvidence(mgr.analysis.artifacts, task, input.report_ref).link : fixedLink ? fixedPropertyEvidence(mgr.analysis.artifacts,task,input.report_ref).link : null;
+    mgr.checkCancelled();
+    let result;
+    try {
+      result = service.mutate(task, scope, input.research, actor(execution), { evidence });
+    } catch (error) {
+      if (!linking) throw error;
+      return { workspace: { reportSaved: true, linked: false, reportId: evidence.reportId, reportSha256: evidence.sha256,
+        code: error.code || 'RESEARCH_LINK_FAILED', stage: 'research-cas',
+        note: 'Existing immutable report retained; reread research/task state before linking again. No collection was repeated.' } };
+    }
+    const committed = { researchSaved: true, writtenResearchRevision: result.researchRevision,
+      ...(linking ? { reportSaved: true, linked: true, reportId: evidence.reportId, reportSha256: evidence.sha256 } : {}),
+      atomicAcrossTaskAndResearch: false };
+    try {
+      const endScope = context(mgr, args), endTask = notes.get(endScope, id), current = service.get(endTask, endScope);
+      return { workspace: { ...committed, research: verificationOverlay(mgr.analysis.artifacts, endTask, current), postCommitContext: 'read' } };
+    } catch (error) {
+      return { workspace: { ...committed, research: { ...result, stale: true, staleReasons: ['post-commit-context-unavailable'] },
+        postCommitContext: 'unavailable', code: error.code || 'RESEARCH_CONTEXT_UNAVAILABLE',
+        note: 'Research was committed. Read current task/context before any further change; this is not a rollback.' } };
+    }
+  }
+  if (action === 'brief') {
+    fields(input, ['action', 'id', 'max_bytes', 'cursor']);
+    let failures = [], failureHistoryError = null;
+    try { failures = mgr.failures?.recent(scope) || []; }
+    catch(error) { failureHistoryError = error.code || 'FAILURE_HISTORY_UNAVAILABLE'; }
+    return { workspace: investigationBrief({ readContext: () => context(mgr, args), readTask: current => notes.get(current, id),
+      readResearch: (task, current) => verificationOverlay(mgr.analysis.artifacts, task, research(mgr, cfg).get(task, current)),
+      readPlanning: (task, current, state) => planningContext({ mgr, cfg, args, execution, context: current, task, research: state }),
+      readEvidence: snapshot => {
+        const artifacts = mgr.analysis.artifacts;
+        if (artifacts.metadata(snapshot.report_id).result.recordSha256 !== snapshot.report_sha256) fail('ARTIFACT_CHANGED', 'Stored report digest differs from the task reference');
+        const report = artifacts.get(snapshot.report_id);
+        validateSnapshotReport(snapshot, report);
+        return report.result;
+      }, capabilities: capabilityCatalog(mgr, cfg, { engine: scope.engine, ownQueue: true }), failures, failureHistoryError,
+      maxBytes: input.max_bytes, cursor: input.cursor }) };
+  }
   if (action === 'create') {
     fields(input, ['action', 'goal', 'hypothesis', 'next_step']);
     const { action: unused, ...value } = input;
@@ -127,7 +292,7 @@ export function runWorkspace(mgr, cfg, args, execution) {
           origin: 'caller-statement', enforced: false },
         evidence: task.systemEvidence, reportsVerified: false,
         startup: [
-          'Read ig5_profile in your own agent scope; enable full only when needed.',
+          'Read ig5_workspace in your own agent scope; enable full only when needed.',
           'Claim handoffId via workspace claim/handoff_id, then read this task again with explicit target and engine; stop if task/database/attachment changed.',
           'Locate the relevant input, processing functions, output and unresolved question; reuse existing evidence before collecting more.',
           'Read selected workspace evidence reports, including partial/truncated/unavailable sections; references alone are not verified reports.',
@@ -210,5 +375,42 @@ export function captureDossier(mgr, cfg, dossier, taskId, execution) {
       error: String(error.message).slice(0, 512), code: error.code || 'TASK_LINK_FAILED',
       note: record ? 'The report save returned successfully, but verification or task linkage failed. Read the task before retrying; no engine database was changed.'
         : 'Report saving did not complete. Partial report files may remain; no task link or engine database change was made.' };
+  }
+}
+
+/** Await only the fixed owned data job. Association is a separate CAS commit. */
+async function runResearchVerification(mgr, args, input, notes, service, task, state, by, signal) {
+  let receipt;
+  if (input.action === 'research-link-verification') {
+    exactReportRef(input.report_ref);
+    const ref = { reportId: input.report_ref.id, sha256: input.report_ref.sha256 };
+    if (!state) fail('RESEARCH_NOT_FOUND', 'Initialize research first');
+    const result = loadVerification(mgr.analysis.artifacts, task, state, ref);
+    if (result.evidenceId !== input.verification.evidence_id || result.obligationId !== input.verification.obligation_id
+      || (result.experimentId || undefined) !== input.verification.experiment_id) fail('INVALID_RESEARCH_REF', 'Receipt does not match requested evidence/obligation/experiment');
+    receipt = { ref, result, reportSaved: true, dataWorkerCleanupConfirmed: null };
+  } else receipt = await verifyResearch(mgr, task, state, input.verification, mgr.scope?.getStore()?.signal || signal);
+  if (receipt.publicationFailure) return { workspace: { reportSaved: receipt.reportSaved, recordSaved: receipt.recordSaved,
+    ...(receipt.ref ? { reportId: receipt.ref.reportId, reportSha256: receipt.ref.sha256 } : {}), linked: false, stage: 'verification-publication',
+    verifierStatus: receipt.result.status, status: 'error', code: receipt.code, error: receipt.error,
+    dataWorkerCleanupConfirmed: receipt.dataWorkerCleanupConfirmed, executionAuthorized: false, businessAccepted: false } };
+  const base = { reportSaved: true, reportId: receipt.ref.reportId, reportSha256: receipt.ref.sha256,
+    status: receipt.result.status, dataWorkerCleanupConfirmed: receipt.dataWorkerCleanupConfirmed, executionAuthorized: false, businessAccepted: false };
+  let linked;
+  try {
+    const currentScope = context(mgr, args), currentTask = notes.get(currentScope, task.taskId), current = service.get(currentTask, currentScope);
+    loadVerification(mgr.analysis.artifacts, currentTask, current, receipt.ref);
+    linked = service.linkVerification(currentTask, currentScope, input.verification, receipt.ref, by);
+  } catch (error) {
+    return { workspace: { ...base, linked: false, stage: 'research-cas', code: error.code || 'VERIFICATION_LINK_FAILED',
+      note: 'Full immutable verifier result retained. Reread revisions and recover with research-link-verification; do not rerun the experiment.' } };
+  }
+  try {
+    const finalScope = context(mgr, args), finalTask = notes.get(finalScope, task.taskId), finalState = service.get(finalTask, finalScope);
+    return { workspace: { ...base, linked: true, writtenResearchRevision: linked.researchRevision,
+      research: verificationOverlay(mgr.analysis.artifacts, finalTask, finalState), postCommitContext: 'read' } };
+  } catch (error) {
+    return { workspace: { ...base, linked: true, writtenResearchRevision: linked.researchRevision,
+      postCommitContext: 'unavailable', code: error.code || 'VERIFICATION_CONTEXT_UNAVAILABLE' } };
   }
 }

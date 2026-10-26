@@ -297,7 +297,7 @@ def runtime_test(engine):
         env.update(IG5_GHIDRA_HOME=str(runtime_root / runtime['ghidraHome']), IG5_JAVA_HOME=str(runtime_root / runtime['javaHome']),
                    IG5_GHIDRA_PROJECT_ROOT=str(scratch / 'projects'))
     else:
-        engine_root = Path(os.environ.get('IG5_IDA_DIR', r'C:\Users\Administrator\Desktop\IDA Professional 9.2'))
+        engine_root = Path(os.environ.get('IG5_IDA_DIR', r'C:\Users\IG5User\Desktop\IDA Professional 9.2'))
         command = [str(engine_root / 'python311/python.exe'), '-B', str(ROOT / 'worker/ig5_worker.py'), '--ida-dir', str(engine_root)]
     messages = queue.Queue()
     with (scratch / 'stderr.log').open('w', encoding='utf-8') as log:

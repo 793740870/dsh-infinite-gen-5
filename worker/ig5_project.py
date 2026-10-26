@@ -44,7 +44,7 @@ def main():
     root = Path(parser.parse_args().artifacts_root)
     if not root.is_absolute() or root.resolve(strict=True) != root:
         raise ValueError('Physical projection artifact root required')
-    emit({'ig5': 'ready', 'engine': 'projection', 'capabilities': ['project', 'project-recorded', 'compose', 'discover', 'decode-observed', 'flow-semantics']})
+    emit({'ig5': 'ready', 'engine': 'projection', 'capabilities': ['project', 'project-recorded', 'compose', 'discover', 'decode-observed', 'flow-semantics','bv-candidate']})
     request, nonce, cleanup = {}, None, True
     directory, p, stages, failed_stage, java_pin = None, None, [], 'preflight', None
     cancel, started = threading.Event(), time.monotonic()
@@ -53,14 +53,15 @@ def main():
         if len(raw) > 64 * 1024 or not raw.endswith(b'\n'):
             raise ValueError('Projection request framing limit')
         request = strict_json(raw)
-        if not isinstance(request, dict) or request.get('method') not in ('project', 'project-recorded', 'compose','discover','decode-observed','flow-semantics') or request.get('id') != 1:
+        if not isinstance(request, dict) or request.get('method') not in ('project', 'project-recorded', 'compose','discover','decode-observed','flow-semantics','bv-candidate') or request.get('id') != 1:
             raise ValueError('Unsupported projection request')
         composing = request['method'] == 'compose'
         recorded = request['method'] == 'project-recorded'
         discovering = request['method'] == 'discover'
         observing = request['method'] == 'decode-observed'
         semanticizing = request['method'] == 'flow-semantics'
-        data_mode = observing or semanticizing
+        candidate_check = request['method'] == 'bv-candidate'
+        data_mode = observing or semanticizing or candidate_check
         p = request['params']
         if not isinstance(p, dict):
             raise ValueError('Invalid projection parameters')
@@ -140,7 +141,7 @@ def main():
                 pin = inventory[name]
                 if len(data) != pin['bytes'] or hashlib.sha256(data).hexdigest() != pin['sha256']:
                     raise ValueError('Projection Python runtime pin mismatch')
-            data = held.enter_context(locked_file(root / 'blobs' / (p['sha256'] + '.bin'), 65536 if observing else 4 * 1024**2 if semanticizing else 64 * 1024**2))
+            data = held.enter_context(locked_file(root / 'blobs' / (p['sha256'] + '.bin'), 65536 if observing or candidate_check else 4 * 1024**2 if semanticizing else 64 * 1024**2))
             if hashlib.sha256(data).hexdigest() != p['sha256']:
                 raise ValueError('Projection input digest mismatch')
             def remaining_budget():
@@ -212,7 +213,7 @@ def main():
             held.enter_context(locked_file(request_file, 64 * 1024))
             cleanup = False
             failed_stage = 'state-computation'
-            process = run_owned(str(executable), ['-I', '-B', '-X', 'utf8', str(package / ('worker/flow_semantics_worker.py' if semanticizing else 'worker/observed_decode_worker.py' if observing else 'worker/path_discovery_worker.py' if discovering else 'worker/projection_worker.py')), str(request_file)],
+            process = run_owned(str(executable), ['-I', '-B', '-X', 'utf8', str(package / ('worker/bitvector_verify.py' if candidate_check else 'worker/flow_semantics_worker.py' if semanticizing else 'worker/observed_decode_worker.py' if observing else 'worker/path_discovery_worker.py' if discovering else 'worker/projection_worker.py')), str(request_file)],
                                 directory, budget_ms=remaining, cancel=cancel)
             cleanup = process['childExitConfirmed']
             with (directory / 'state-computation-process.json').open('x', encoding='utf8') as stream:
@@ -227,7 +228,7 @@ def main():
         failed_stage = 'result-validation'
         with locked_file(directory / 'stdout.log', 4 * 1024**2) as output:
             result = strict_json(output)
-        expected_schema = ('ig5-flow-semantic-assessment-v1' if semanticizing else 'ig5-observed-decode-v1' if observing else 'ig5-path-discovery-v1' if discovering else ('ig5-pcode-opaque-status-transition-chain-v1' if plan.get('template_mode') == 'opaque-status' else
+        expected_schema = ('ig5-bitvector-solver-v1' if candidate_check else 'ig5-flow-semantic-assessment-v1' if semanticizing else 'ig5-observed-decode-v1' if observing else 'ig5-path-discovery-v1' if discovering else ('ig5-pcode-opaque-status-transition-chain-v1' if plan.get('template_mode') == 'opaque-status' else
                             'ig5-pcode-opaque-transition-chain-v1' if plan.get('template_mode') == 'opaque-effects' else
                             'ig5-pcode-transition-chain-v1' if plan.get('representation') == 'transition-chain' else 'ig5-pcode-composition-v1') if composing else
                            'ig5-pcode-guarded-projection-v1' if p.get('projection_mode') == 'guarded-path' else

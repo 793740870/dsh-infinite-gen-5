@@ -101,12 +101,13 @@ function fixtures() {
     'ig5_xrefs', 'ig5_calls', 'ig5_bytes', 'ig5_search', 'ig5_listing', 'ig5_scan',
     'ig5_export_diff', 'ig5_cfg', 'ig5_slice', 'ig5_fingerprint', 'ig5_stack',
     'ig5_switches', 'ig5_vtables', 'ig5_microcode', 'ig5_bindiff', 'ig5_ir',
-    'ig5_crypto', 'ig5_protocol', 'ig5_capture', 'ig5_capture_control',
+    'ig5_crypto', 'ig5_protocol', 'ig5_package', 'ig5_capture', 'ig5_capture_control',
+    'ig5_workspace', 'ig5_recovery',
     'ig5_rename', 'ig5_patch_bytes', 'ig5_comment', 'ig5_analyze', 'ig5_set_type',
     'ig5_undo', 'ig5_run_idapython', 'ig5_dbg', 'ig5_struct', 'ig5_switch_repair',
     'ig5_emulate', 'ig5_sync',
   ];
-  assert.equal(names.length, 40, 'fixture mirrors the full product catalog');
+  assert.equal(names.length, 43, 'fixture mirrors the full product catalog');
   const definitions = names.map((name) => ({
     name,
     description: 'fixture ' + name,
@@ -152,7 +153,7 @@ for (const skill of host.entries.skills.values()) {
 
 controller.setToolset('full');
 assert.equal(host.entries.tools.size, fixture.definitions.length);
-assert.equal(host.entries.tools.size, 40);
+assert.equal(host.entries.tools.size, 43);
 assert.ok(host.entries.tools.has('ig5_crypto') && host.entries.tools.has('ig5_protocol'), 'full includes both data analysis lanes');
 assertSchemas(host.entries.tools);
 const changes = host.toolChanges();
@@ -277,7 +278,7 @@ const future = createHost();
 const futureFixture = fixtures();
 const extension = { ...futureFixture.definitions[0], name: 'ig5_future_read' };
 const futureController = installWorkflow(future.ctx, { cfg: { toolset: 'full' }, mgr: futureFixture.mgr, definitions: [...futureFixture.definitions, extension] });
-assert.equal(future.entries.tools.size, 41, 'full remains catalog-driven rather than hard-coding the current count');
+assert.equal(future.entries.tools.size, 44, 'full remains catalog-driven rather than hard-coding the current count');
 assert.ok(future.entries.tools.has(extension.name));
 await futureController.dispose();
 await future.ctx.dispose();
@@ -330,14 +331,14 @@ function scopedHost(existing = []) {
   assert.equal(controller.snapshot({ agent: a }).toolsetScope, 'agent'); assert.equal(controller.getToolset(a), 'core');
   assert.throws(() => controller.setToolset('full'), { code: 'AGENT_SCOPE_REQUIRED' });
   controller.setToolset('full', { agent: a });
-  assert.equal(host.registry.schemas(a).length, 40); assert.equal(host.registry.schemas(b).length, 8); assert.equal(host.registry.schemas().length, 8);
+  assert.equal(host.registry.schemas(a).length, 43); assert.equal(host.registry.schemas(b).length, 8); assert.equal(host.registry.schemas().length, 8);
   assert(host.registry.get('ig5_crypto', a)); assert.equal(host.registry.get('ig5_crypto', b), undefined);
   assert.equal((await host.registry.execute({ name: 'ig5_crypto', agent: a, arguments: {} })).isError, undefined);
   assert.equal((await host.registry.execute({ name: 'ig5_crypto', agent: b, arguments: {} })).isError, true);
   controller.setToolset('full', b); controller.setToolset('core', a.ctx);
-  assert.equal(host.registry.schemas(a).length, 8); assert.equal(host.registry.schemas(b).length, 40);
+  assert.equal(host.registry.schemas(a).length, 8); assert.equal(host.registry.schemas(b).length, 43);
   host.failScoped('ig5_patch_bytes'); assert.throws(() => controller.setToolset('full', a), /registration failed/);
-  assert.equal(host.registry.schemas(a).length, 8); assert.equal(host.registry.schemas(b).length, 40); assert.equal(controller.getToolset(a), 'core'); host.failScoped();
+  assert.equal(host.registry.schemas(a).length, 8); assert.equal(host.registry.schemas(b).length, 43); assert.equal(controller.getToolset(a), 'core'); host.failScoped();
   const command = host.entries.commands.get('ig5');
   assert.equal((await command.handler({ rawInput: 'toolset full', agent: a })).kind, 'success');
   assert.equal((await command.handler({ rawInput: 'toolset core', agent: a })).kind, 'success'); assert.equal(controller.getToolset(b), 'full');
@@ -345,7 +346,7 @@ function scopedHost(existing = []) {
   assert.throws(() => controller.setToolset('full', fake), /scoped context/); assert.equal(host.entries.tools.size, 8);
   await a.dispose(); assert.throws(() => controller.setToolset('full', a), /disposed/);
   const replacement = host.agent('agent-A'); await host.emit('agent/created', { agent: replacement }); controller.setToolset('full', replacement);
-  await host.emit('agent/disposed', { agent: a }); assert.equal(host.registry.schemas(replacement).length, 40, 'same-id stale disposal cannot affect replacement');
+  await host.emit('agent/disposed', { agent: a }); assert.equal(host.registry.schemas(replacement).length, 43, 'same-id stale disposal cannot affect replacement');
   await controller.dispose(); assert.equal(host.registry.schemas(b).length, 0); assert.equal(host.registry.schemas(replacement).length, 0);
   for (const handlers of host.listeners.values()) assert.equal(handlers.size, 0);
   await host.ctx.dispose();
@@ -354,8 +355,8 @@ function scopedHost(existing = []) {
 {
   const existing = [], host = scopedHost(existing), data = fixtures(), a = host.agent('existing'); existing.push(a);
   const controller = installWorkflow(host.ctx, { cfg: { toolset: 'full' }, mgr: data.mgr, definitions: data.definitions });
-  assert.equal(host.registry.schemas().length, 8); assert.equal(host.registry.schemas(a).length, 40);
-  const b = host.agent('late'); await host.emit('agent/created', { agent: b }); assert.equal(host.registry.schemas(b).length, 40);
+  assert.equal(host.registry.schemas().length, 8); assert.equal(host.registry.schemas(a).length, 43);
+  const b = host.agent('late'); await host.emit('agent/created', { agent: b }); assert.equal(host.registry.schemas(b).length, 43);
   controller.setToolset('core', a); await host.emit('agent/created', { agent: a }); assert.equal(controller.getToolset(a), 'core');
   await host.ctx.dispose(); assert.equal(host.locals.get(a.ctx).size, 0); assert.equal(host.locals.get(b.ctx).size, 0);
   await controller.dispose(); console.log('PASS full defaults initialize existing/new agents and owner unload removes agent-owned schemas');
@@ -420,20 +421,20 @@ async function installedRegistry() {
     assert.deepEqual(autonomyStatus(context, { agent: b }).goalTools, []);
     removeScopedGoal();
     controller.setToolset('full', a);
-    assert.equal(context.tools.schemas().length, 8); assert.equal(context.tools.schemas(a).length, 40); assert.equal(context.tools.schemas(b).length, 8);
+    assert.equal(context.tools.schemas().length, 8); assert.equal(context.tools.schemas(a).length, 43); assert.equal(context.tools.schemas(b).length, 8);
     assert(context.tools.get('ig5_crypto', a)); assert.equal(context.tools.get('ig5_crypto', b), undefined);
     const run = agent => context.tools.execute({ name: 'ig5_crypto', arguments: {}, agent, signal: new AbortController().signal, callId: 'scope-test-call' });
     assert.equal((await run(a)).isError, false); assert.match((await run(b)).content[0].text, /unknown tool/);
     controller.setToolset('full', b); controller.setToolset('core', a);
-    assert.equal(context.tools.schemas(a).length, 8); assert.equal(context.tools.schemas(b).length, 40);
+    assert.equal(context.tools.schemas(a).length, 8); assert.equal(context.tools.schemas(b).length, 43);
     const collision = a.ctx.tools.register(data.definitions.find(tool => tool.name === 'ig5_patch_bytes'));
     assert.throws(() => controller.setToolset('full', a), /already registered/);
-    assert.equal(context.tools.schemas(a).length, 9); assert.equal(context.tools.get('ig5_crypto', a), undefined); assert.equal(context.tools.schemas(b).length, 40);
+    assert.equal(context.tools.schemas(a).length, 9); assert.equal(context.tools.get('ig5_crypto', a), undefined); assert.equal(context.tools.schemas(b).length, 43);
     collision();
     await owner.dispose(); assert.equal(context.tools.schemas(a).length, 0); assert.equal(context.tools.schemas(b).length, 0);
     let reloaded;
     const nextOwner = context.plugin(Object.assign(inner => { reloaded = installWorkflow(inner, { cfg: {}, mgr: data.mgr, definitions: data.definitions }); }, { inject: ['tools'] })); await nextOwner;
-    reloaded.setToolset('full', b); assert.equal(context.tools.schemas(b).length, 40); assert.equal(context.tools.schemas(a).length, 8);
+    reloaded.setToolset('full', b); assert.equal(context.tools.schemas(b).length, 43); assert.equal(context.tools.schemas(a).length, 8);
     await nextOwner.dispose(); assert.equal(context.tools.schemas(b).length, 0);
     console.log('PASS installed DSH Tools actual schema/get/execute isolation, duplicate rollback and owner reload (' + copied.size + ' dependency packages)');
   } finally {
@@ -442,4 +443,4 @@ async function installedRegistry() {
   }
 }
 await installedRegistry();
-console.log('IG5 workflow: Core8/Full40, legacy compatibility, agent scope isolation, safe commands, eight skills, registration rollback, and disposal passed.');
+console.log('IG5 workflow: Core8/Full43, legacy compatibility, agent scope isolation, safe commands, eight skills, registration rollback, and disposal passed.');

@@ -11,7 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(here, '..');
 const mod = await import(pathToFileURL(path.join(pluginRoot, 'index.js')).href);
 
-const IDA_DIR = process.env.IG5_IDA_DIR || 'C:\\Users\\Administrator\\Desktop\\IDA Professional 9.2';
+const IDA_DIR = process.env.IG5_IDA_DIR || 'C:\\Users\\IG5User\\Desktop\\IDA Professional 9.2';
 const input = process.argv[2] || path.join(pluginRoot, '..', '_research', 'fixtures', 'notepad.exe');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ig5-host-'));
 const TARGET = path.join(scratch, path.basename(input));

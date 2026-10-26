@@ -49,6 +49,12 @@ def audit(report_path: str, report_sha: str):
     fetch, indexed, opcode, target = {}, {}, {}, {}
     dictionary, occurrence_keys, targets, recordings = [], set(), set(), set()
     ordinary = partial = unknown_gprs = unknown_stores = total = 0
+    stack = {name: {"name": name, "bodies": 0, "mutatedBodies": 0, "smallAlignedDeltaBodies": 0,
+                    "nearbyAccessBodies": 0, "nearbyAccesses": 0, "deltaExamples": []} for name in GPRS}
+    mask = (1 << 64) - 1
+    def distance(a, b):
+        value = (int(b, 16) - int(a, 16)) & mask
+        return value - (1 << 64) if value > (1 << 63) else value
     source_files = 0
     for group in source_groups:
         if not isinstance(group, dict) or set(group) != {"handlers", "recurrence", "selection"} or not all(exact_ref(group[key]) for key in group):
@@ -102,6 +108,32 @@ def audit(report_path: str, report_sha: str):
                     opcode[name] = opcode.get(name, 0) + 1
                 if r.get("finalGprs", {}).get(name) == r.get("target"):
                     target[name] = target.get(name, 0) + 1
+            groups = s.get("groups")
+            if not isinstance(groups, list) or not 1 <= len(groups) <= 128:
+                reject("selected group budget differs")
+            accesses = []
+            for observed in groups:
+                reads = observed.get("memoryReads", [])
+                writes = observed.get("memoryWrites", [])
+                if isinstance(reads, list): accesses.extend(reads)
+                if isinstance(writes, dict): writes = writes.get("stores", [])
+                if isinstance(writes, list): accesses.extend(writes)
+            if len(accesses) > 4096: reject("memory access budget differs")
+            for name in GPRS:
+                before = groups[0]["before"]["gprs"][name]
+                after = groups[-1]["after"]["gprs"][name]
+                if any(not isinstance(v, str) or re.fullmatch(r"0x[0-9a-f]{1,16}", v) is None for v in (before, after)):
+                    reject("unobserved register")
+                nearby = sum(isinstance(a.get("address"), str) and re.fullmatch(r"0x[0-9a-f]{1,16}", a["address"]) is not None
+                             and any(-4096 <= distance(base, a["address"]) <= 4096 for base in (before, after)) for a in accesses)
+                row = stack[name]; row["bodies"] += 1; row["nearbyAccesses"] += nearby
+                if nearby: row["nearbyAccessBodies"] += 1
+                if before != after:
+                    row["mutatedBodies"] += 1
+                    delta = hex((int(after, 16) - int(before, 16)) & mask)
+                    signed = distance(before, after)
+                    if -256 <= signed <= 256 and signed % 2 == 0: row["smallAlignedDeltaBodies"] += 1
+                    if len(row["deltaExamples"]) < 8 and delta not in row["deltaExamples"]: row["deltaExamples"].append(delta)
             assessment = h.get("assessment", {})
             gprs = assessment.get("gprs")
             if not isinstance(gprs, list) or [item.get("name") for item in gprs] != GPRS:
@@ -124,6 +156,14 @@ def audit(report_path: str, report_sha: str):
     if evidence != expected_evidence:
         reject("evidence counts differ")
     roles = result.get("roles", {})
+    expected_vsp = sorted((dict(row, coverage=f'{row["nearbyAccessBodies"]}/{total}',
+                                    kind="memory-proximate-mutable-register", vmRoleProved=False)
+                           for row in stack.values() if row["nearbyAccessBodies"] > 0 and row["mutatedBodies"] > 0),
+                          key=lambda row: (-row["nearbyAccessBodies"], -row["smallAlignedDeltaBodies"], row["name"]))
+    if json.dumps(roles.get("vspCandidates"), sort_keys=True) != json.dumps(expected_vsp, sort_keys=True): reject("VSP candidate derivation differs")
+    for family in ("vipCandidates", "dispatchBaseCandidates", "opcodeCarrierCandidates", "handlerTargetCarrierCandidates", "vspCandidates"):
+        if not isinstance(roles.get(family), list) or any(row.get("vmRoleProved") is not False for row in roles[family]):
+            reject("candidate proof boundary differs")
     vip = count_candidates({name + ":" + observed_delta: count for (name, observed_delta), count in fetch.items()}, total)
     vip_names = sorted(item.split(":", 1)[0] for item in vip)
     if sorted(item.get("name") for item in roles.get("vipCandidates", [])) != vip_names:

@@ -18,7 +18,7 @@ const fail = () => { throw new Error('Analysis failure evidence mismatch; origin
 
 /** A failed request stays failed. Import only its bounded, hash-bound diagnostics. */
 export function importAnalysisFailure(artifacts, params, kind, nonce, message) {
-  if (!['project','project-recorded','compose','discover','decode-observed','flow-semantics'].includes(kind) || !message.analysisFailure) return undefined;
+  if (!['project','project-recorded','compose','discover','decode-observed','flow-semantics','bv-candidate'].includes(kind) || !message.analysisFailure) return undefined;
   const ref = message.analysisFailure;
   if (!keys(ref,['name','bytes','sha256']) || ref.name !== 'analysis-failure.json' ||
       !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > 65536 || !sha(ref.sha256) ||

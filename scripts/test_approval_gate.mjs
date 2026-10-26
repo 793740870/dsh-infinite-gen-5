@@ -5,16 +5,24 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(process.env.IG5_PLUGIN_UNDER_TEST || fileURLToPath(new URL('..', import.meta.url)));
-const source = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
-const start = source.indexOf('const IG5_WRITE_TOOLS =');
-const end = source.indexOf('function installDataRoute', start);
-assert(start >= 0 && end > start, 'Actual product approval gate must be present');
-const install = vm.runInNewContext(source.slice(start, end) + '\ninstallApprovalGate;', {
-  diagAppend() {}, fs: new Proxy({}, { get() { throw new Error('Approval gate test must not access writable file APIs'); } }),
-}, { filename: 'actual-product-approval-gate.js' });
+// 审批门现位于 source/approval_gate.js;旧安装副本(无该文件)回退到从 index.js 文本切片。
+const gateModule = path.join(root, 'source', 'approval_gate.js');
+let install;
+if (fs.existsSync(gateModule)) {
+  ({ installApprovalGate: install } = await import(pathToFileURL(gateModule).href));
+  assert.equal(typeof install, 'function', 'Actual product approval gate must be exported');
+} else {
+  const source = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
+  const start = source.indexOf('const IG5_WRITE_TOOLS =');
+  const end = source.indexOf('function installDataRoute', start);
+  assert(start >= 0 && end > start, 'Actual product approval gate must be present');
+  install = vm.runInNewContext(source.slice(start, end) + '\ninstallApprovalGate;', {
+    diagAppend() {}, fs: new Proxy({}, { get() { throw new Error('Approval gate test must not access writable file APIs'); } }),
+  }, { filename: 'actual-product-approval-gate.js' });
+}
 const gated = ['rename', 'patch_bytes', 'comment', 'analyze', 'set_type', 'undo', 'run_idapython', 'dbg', 'struct', 'switch_repair', 'emulate', 'sync', 'capture_control'].map(name => 'ig5_' + name);
 const results = []; let sequence = 0;
 function host(outcome, seam = 'service') {
@@ -113,6 +121,60 @@ await test('read-only tools delegate without public approval service', async () 
     assert.equal(result.kind, 'allow'); assert.equal(delegates, 1);
   }
   assert.equal(h.requests.length, 0);
+});
+await test('approval prompt shows the real script payload and a hash that covers all of it', async () => {
+  const code = 'import os\nprint(os.listdir("C:/"))\n# marker-' + 'x'.repeat(10);
+  const h = host(); await h.pre(execution('ig5_run_idapython', { arguments: { target: 'C:/samples/a.exe', code } }), async () => ({ kind: 'allow' }));
+  const { reason, displayReason } = h.requests[0];
+  for (const text of [reason, displayReason.zh, displayReason.en]) { assert(text.includes('os.listdir("C:/")'), 'script source must be visible to the approver'); }
+  const hash = reason.match(/SHA-256 ([0-9a-f]{64})/)?.[1]; assert(hash, 'prompt must carry a SHA-256 of the arguments');
+  const again = host(); await again.pre(execution('ig5_run_idapython', { arguments: { code, target: 'C:/samples/a.exe' } }), async () => ({ kind: 'allow' }));
+  assert.equal(again.requests[0].reason.match(/SHA-256 ([0-9a-f]{64})/)[1], hash, 'hash must not depend on key order');
+  const other = host(); await other.pre(execution('ig5_run_idapython', { arguments: { target: 'C:/samples/a.exe', code: code + ' ' } }), async () => ({ kind: 'allow' }));
+  assert.notEqual(other.requests[0].reason.match(/SHA-256 ([0-9a-f]{64})/)[1], hash, 'any change to the script must change the hash');
+});
+await test('long scripts are shown in full, head and tail, up to the tool maximum of 64 KiB', async () => {
+  for (const size of [7613, 65536]) {
+    const body = 'b = 2\n'.repeat(Math.ceil(size / 6)).slice(0, size - 30);
+    const code = `# BEGIN-MARKER\n${body}\n# END-MARKER`;
+    const h = host(); const result = await h.pre(execution('ig5_run_idapython', { arguments: { target: 't', code } }), async () => ({ kind: 'allow' }));
+    assert.equal(result.kind, 'allow'); assert.equal(h.requests.length, 1);
+    for (const text of [h.requests[0].reason, h.requests[0].displayReason.zh, h.requests[0].displayReason.en]) {
+      assert(text.includes(code), `the complete ${code.length}-character script must be present verbatim`);
+      assert(!text.includes('已截断') && !text.includes('truncated'), 'nothing may be truncated');
+    }
+  }
+});
+await test('a payload too large to display in full is denied without asking for approval or dispatching', async () => {
+  const code = 'x = 1\n'.repeat(30000); // ~180k characters, over the display limit
+  const h = host(); let delegates = 0;
+  const decision = await h.pre(execution('ig5_run_idapython', { arguments: { target: 't', code } }), async () => { delegates++; return { kind: 'allow' }; });
+  assert.equal(decision.kind, 'deny'); assert.match(decision.reason, /cannot be reviewed in full/);
+  assert.equal(h.requests.length, 0, 'the approver must never be asked to approve a partial view'); assert.equal(delegates, 0);
+});
+await test('capture_control prompt redacts request credentials', async () => {
+  const request = { method: 'POST', headers: { authorization: 'Bearer SECRET-TOKEN-123' }, body: 'password=SECRET-BODY-456' };
+  const h = host(); await h.pre(execution('ig5_capture_control', { arguments: { action: 'replay', id: 'x', request } }), async () => ({ kind: 'allow' }));
+  const { reason, displayReason } = h.requests[0];
+  for (const text of [reason, displayReason.zh, displayReason.en]) { assert(!text.includes('SECRET-TOKEN-123') && !text.includes('SECRET-BODY-456')); }
+  assert(reason.includes('authorization'), 'header names may be shown');
+});
+await test('a failed audit write is reported to diagnostics and never breaks the result path', async () => {
+  const os = await import('node:os');
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'ig5-audit-fail-'));
+  try {
+    // 目录可写（诊断能落盘），但 approvals.jsonl 被占成目录，使审计追加必然失败。
+    fs.mkdirSync(path.join(scratch, 'approvals.jsonl'));
+    const handlers = new Map(), cfg = { artifactDir: scratch };
+    install({ on(name, handler) { handlers.set(name, handler); }, get() { return undefined; } }, cfg);
+    let delegated = 0;
+    const result = await handlers.get('tools/post-execute')({ name: 'ig5_rename', arguments: { target: 'a', name: 'b' }, callId: 'audit-fail-1' },
+      { isError: false, value: { ok: true } }, async () => { delegated++; return { kind: 'accept', marker: 'kept' }; });
+    assert.equal(delegated, 1, 'result path must continue'); assert.equal(result.marker, 'kept');
+    assert(fs.statSync(path.join(scratch, 'approvals.jsonl')).isDirectory(), 'no audit row could be written');
+    const diag = fs.readFileSync(path.join(scratch, 'ig5-diag.log'), 'utf8');
+    assert.match(diag, /审计行写入失败.*tool=ig5_rename.*callId=audit-fail-1/, 'the failed audit must leave a diagnostics trace');
+  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 });
 const report = { ok: results.every(row => row.ok), pluginRoot: root, gatedTools: gated.length, checks: results,
   sideEffects: { workersStarted: 0, targetsExecuted: 0, databaseWrites: 0, profileWrites: 0, artifactWrites: 0, networkRequests: 0 },

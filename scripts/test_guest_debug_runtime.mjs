@@ -61,7 +61,7 @@ const report = { schema: 'ig5-public-guest-native-acceptance-v1', ok: false, con
   sourceRoot: path.resolve(import.meta.dirname, '..'), target, targetSha256: hash(target), guestCID: profile.guestCID, profileSha256: pin,
   bundleSha256: profile.bundleSha256, calls, approvals, ownedFixtureOnly: true, protectionBusinessRecoveryPassed: false };
 try {
-  assert.equal(definitions.size, 40);
+  assert.equal(definitions.size, 43);
   const inspected = await call('ig5_profile', { guest_debug: 'lab' }); assert.equal(inspected.guestDebug.bindingSha256, pin);
   const before = await call('ig5_status');
   if (before.remoteExecutions.length) await dbg('recover', { control: 'takeover' });

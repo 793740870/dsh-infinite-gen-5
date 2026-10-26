@@ -1,5 +1,17 @@
 ﻿# Shared, read-only runtime validation for installation and portable packaging.
 $script:IG5RuntimeCaches = @('downloads', 'sessions', 'projects', 'native-build', 'toolchain', 'clientdeps', '.cache', '__pycache__')
+# The plugin source root may only ship these top-level files. Directory traversal
+# skips any other root file (local sample copies, logs, build outputs), so a stray
+# artifact cannot ride into a portable package just because no denylist rule names
+# it. Unlisted code-like extensions fail loudly instead of being dropped silently.
+$script:IG5PackRootFiles = @(
+    '.gitattributes', '.gitignore', 'AGENTS.md', 'HARNESS_PLUGIN.md', 'LICENSE', 'README.md',
+    'THIRD_PARTY_NOTICES.txt', 'advanced_tools.js', 'analysis_tools.js', 'capture_tools.js', 'client.js',
+    'cordis.patch.yml', 'engine_runtime.js', 'index.js', 'install.ps1', 'integration_tools.js',
+    'package.json', 'semantic_diff.js', 'semantic_diff_async.js', 'semantic_diff_worker.js',
+    'uninstall.ps1', 'workflow.js'
+)
+$script:IG5SkippedRootFiles = New-Object 'System.Collections.Generic.List[string]'
 
 function Get-IG5FullPath {
     param([Parameter(Mandatory)][string]$Path)
@@ -101,9 +113,10 @@ function Test-IG5ExcludedPath {
 }
 
 function Get-IG5PackFiles {
-    param([Parameter(Mandatory)][string]$Root, [switch]$IncludeExcluded)
+    param([Parameter(Mandatory)][string]$Root, [switch]$IncludeExcluded, [switch]$IncludeUnlistedRootFiles)
     $base = Get-IG5FullPath $Root
     $isRuntime = (Test-IG5Path (Join-Path $base 'ghidra\runtime.json')) -or (Test-IG5Path (Join-Path $base 'x64dbg\runtime.json'))
+    $isPluginRoot = -not $isRuntime -and (Test-IG5Path (Join-Path $base 'package.json') Leaf) -and (Test-IG5Path (Join-Path $base 'index.js') Leaf)
     $isSourceTree = $base -match '(^|[\\/])third_party[\\/]sources(?:[\\/]|$)'
     $pending = New-Object 'System.Collections.Generic.Stack[string]'
     $pending.Push($base)
@@ -114,6 +127,11 @@ function Get-IG5PackFiles {
             $relative = Get-IG5RelativePath $base $entry.FullName
             $filterPath = if ($isSourceTree) { 'third_party/sources/' + $relative } else { $relative }
             if (-not $IncludeExcluded -and (Test-IG5ExcludedPath $filterPath -RuntimeRoot:$isRuntime)) { continue }
+            if (-not $IncludeExcluded -and -not $IncludeUnlistedRootFiles -and $isPluginRoot -and $entry -isnot [IO.DirectoryInfo] -and $relative.IndexOf('/') -lt 0 -and $script:IG5PackRootFiles -notcontains $relative) {
+                if ($relative -match '\.(?:js|mjs|cjs|json|ps1|psm1|ya?ml)$') { throw "Unexpected plugin root file; add it to IG5PackRootFiles or move it out of the source tree: $relative" }
+                $script:IG5SkippedRootFiles.Add($relative)
+                continue
+            }
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "发行目录不能含链接: $($entry.FullName)" }
             if ($entry -is [IO.DirectoryInfo]) { $pending.Push((Get-IG5FullPath $entry.FullName)) }
             else { [pscustomobject]@{Name=$entry.Name;FullName=(Get-IG5FullPath $entry.FullName);Length=$entry.Length;Attributes=$entry.Attributes} }
@@ -282,9 +300,9 @@ function Copy-IG5Pack {
 
 function Test-IG5RuntimeVersion {
     param([string]$AssetVersion, [string]$PluginVersion)
-    # 1.1 adds the Node capture lane without changing the sealed native engines.
+    # 1.1/1.2 reuse the exact sealed native engines; compatibility is explicit.
     # Keep the original manifests and SHA-256 pins byte-for-byte intact.
-    return ($AssetVersion -ceq $PluginVersion -or ($PluginVersion -ceq '1.1.0' -and $AssetVersion -ceq '1.0.0'))
+    return ($AssetVersion -ceq $PluginVersion -or ($PluginVersion -cin @('1.1.0','1.2.0','1.3.0') -and $AssetVersion -ceq '1.0.0'))
 }
 
 function Write-IG5RuntimeManifest {
@@ -296,7 +314,7 @@ function Write-IG5RuntimeManifest {
 }
 
 function Assert-IG5FileInventory {
-    param([string]$Root, [object[]]$Files, [string]$Label, [switch]$IncludeExcluded, [string[]]$IgnoredPrefixes = @())
+    param([string]$Root, [object[]]$Files, [string]$Label, [switch]$IncludeExcluded, [string[]]$IgnoredPrefixes = @(), [switch]$IncludeUnlistedRootFiles)
     if (-not $Files.Count) { throw "文件清单为空: $Label" }
     $progress = $Files.Count -ge 4096
     $progressLabel = [regex]::Replace([string]$Label, '[^A-Za-z0-9._/-]', '_')
@@ -315,7 +333,7 @@ function Assert-IG5FileInventory {
         $registered++
         if ($progress -and $registered % 4096 -eq 0) { Write-Host "[VERIFY] $progressLabel sizes/paths: $registered / $($Files.Count)" }
     }
-    $actual = @(Get-IG5PackFiles $Root -IncludeExcluded:$IncludeExcluded | Where-Object {
+    $actual = @(Get-IG5PackFiles $Root -IncludeExcluded:$IncludeExcluded -IncludeUnlistedRootFiles:$IncludeUnlistedRootFiles | Where-Object {
         $candidate = Get-IG5RelativePath $Root $_.FullName
         $ignored = $false
         foreach ($prefix in $IgnoredPrefixes) { if ($candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { $ignored = $true; break } }
@@ -376,21 +394,24 @@ function Assert-IG5PluginSource {
     $required = @('package.json','index.js','client.js','engine_runtime.js','advanced_tools.js','integration_tools.js','analysis_tools.js','workflow.js',
         'semantic_diff.js','semantic_diff_async.js','semantic_diff_worker.js','source/project_store.js','source/attachment_lease.js','source/address_ref.js','source/host_platform.js','source/worker_transport.js',
         'source/audit_history.js','source/patch_export.js','source/history_index.js','source/json_output.js','source/reverse_runtime.js','source/kernel_jobs.js',
-        'source/function_dossier.js','source/investigation_store.js','source/investigation_workflow.js',
-        'source/analysis_artifacts.js','source/analysis_jobs.js','source/analysis_worker.js','source/crypto_analysis.js','source/crypto_recovery.js','source/protocol_analysis.js','source/protocol_inference.js',
-        'worker/ig5_worker.py','worker/scan_analysis.py','worker/advanced_analysis.py','worker/execution_analysis.py','worker/memory_image.py','worker/cpu_emulator.py','worker/vendor/NOTICE.txt',
+        'source/function_dossier.js','source/investigation_store.js','source/investigation_workflow.js','source/knowledge_catalog.js','source/knowledge_seeds.js','source/knowledge_documents.js','source/knowledge_io.js',
+        'source/research_v2_contract.js','source/research_v2_store.js','source/knowledge_v2.js','source/knowledge_v2_compat.js','source/knowledge_publish_v2.js','source/research_case_index.js','source/research_case_bridge.js','source/method_registry.js','source/method_applicability.js','source/experiment_shadow.js','source/bitvector_contract.js','source/bitvector_replay.js','source/bitvector_solver.js','source/candidate_workflow.js','source/bitvector_provider.js','source/bitvector_provider_adapter.js','source/cff_overlay.js','source/cff_workflow.js','source/cff_state.js','source/cff_state_workflow.js','source/vm_instances.js','source/vm_instance_workflow.js','source/research_discovery.js','source/research_discovery_review.js','scripts/discover_research_sources.mjs','scripts/review_research_discovery.mjs','worker/bitvector_verify.py','scripts/publish_research_v2.mjs',
+        'source/analysis_artifacts.js','source/analysis_jobs.js','source/analysis_worker.js','source/apk_zip.js','source/apk_der.js','source/apk_axml.js','source/apk_dex.js','source/apk_rules.js','source/apk_manifest.js','source/apk_analysis.js','source/crypto_analysis.js','source/crypto_recovery.js','source/protocol_analysis.js','source/protocol_inference.js',
+        'worker/ig5_worker.py','worker/scan_analysis.py','worker/behavior_rules.py','worker/behavior_inventory.py','worker/string_decoding.py','worker/packer_rules.py','worker/packer_analysis.py','worker/firmware_rules.py','worker/firmware_io.py','worker/firmware_fs.py','worker/firmware_images.py','worker/firmware_scan.py','worker/firmware_cli.py','source/firmware_jobs.js','worker/advanced_analysis.py','worker/execution_analysis.py','worker/memory_image.py','worker/cpu_emulator.py','worker/vendor/NOTICE.txt',
         'worker/ig5_kernel.py','worker/kernel_image.py','worker/kernel_analysis.py','worker/kernel_rtti.py','worker/kernel_decompile.py',
         'worker/vendor/unicorn/__init__.py','worker/vendor/unicorn/lib/unicorn.dll',
-        'adapters/ghidra/worker.py','adapters/ghidra/pcode_view.py','adapters/ghidra/switch_analysis.py','adapters/ghidra/microcode_analysis.py','adapters/ghidra/script_api.py','adapters/ghidra/jpype-patch/JPypeContext.java','adapters/ghidra/jpype-patch/upstream/org.jpype.jar',
+        'adapters/ghidra/worker.py','adapters/ghidra/decode_scan.py','adapters/ghidra/pcode_view.py','adapters/ghidra/switch_analysis.py','adapters/ghidra/microcode_analysis.py','adapters/ghidra/script_api.py','adapters/ghidra/jpype-patch/JPypeContext.java','adapters/ghidra/jpype-patch/upstream/org.jpype.jar',
         'adapters/kernel/native/ig5_decompiler.dll','adapters/kernel/native/build-proof.json','adapters/kernel/native/Ghidra-LICENSE.txt','adapters/kernel/native/NOTICE','adapters/kernel/native/zlib-README.txt',
         'adapters/ghidra/jpype-patch/LICENSE','adapters/ghidra/jpype-patch/UPSTREAM-NOTICE','adapters/ghidra/jpype-patch/NOTICE.txt','adapters/ghidra/jpype-patch/unicode-bootstrap.patch',
         'scripts/patch_ghidra_jpype.ps1','scripts/patch_ghidra_project_paths.ps1','adapters/ghidra/local-project-path/build_patch.py',
         'adapters/ghidra/local-project-path/local-project-path.patch','adapters/ghidra/local-project-path/NOTICE.txt','adapters/ghidra/local-project-path/README.md',
         'adapters/x64dbg/adapter.py','adapters/x64dbg/native/ig5-bridge.dp32','adapters/x64dbg/native/ig5-bridge.dp64','adapters/x64dbg/native/sha256.json',
-        'scripts/runtime_pack.ps1','scripts/bootstrap_distribution.ps1','scripts/distribution.json','install.ps1','uninstall.ps1','cordis.patch.yml','README.md','HARNESS_PLUGIN.md','LICENSE','THIRD_PARTY_NOTICES.txt')
+        'scripts/runtime_pack.ps1','scripts/recover_legacy_project_lock.mjs','scripts/bootstrap_distribution.ps1','scripts/distribution.json','install.ps1','uninstall.ps1','cordis.patch.yml','README.md','HARNESS_PLUGIN.md','LICENSE','THIRD_PARTY_NOTICES.txt')
     $sourcePackage = Read-IG5Text (Join-Path $Root 'package.json') | ConvertFrom-Json
-    if ([string]$sourcePackage.version -eq '1.1.0') { $required += @('capture_tools.js','source/capture_service.js','source/capture_proxy.js','source/capture_ca.js','source/capture_review.js','source/capture_payload.js','source/delivered_payload.js','source/capture_state_trace.js','source/protocol_state.js','adapters/ghidra/deobfuscation_analysis.py','adapters/ghidra/deobfuscation_symbolic.py') }
-    if ([string]$sourcePackage.version -eq '1.1.0') { $required += @('source/trace_jobs.js','worker/ig5_trace.py','worker/trace_analysis.py','worker/requirements-trace.txt','worker/trace_vendor/ig5-manifest.json','worker/trace_vendor/NOTICE.txt','worker/trace_vendor/triton.cp312-win_amd64.pyd','worker/trace_vendor/triton_library-1.0.0rc4.dist-info/RECORD','worker/trace_vendor/triton_library-1.0.0rc4.dist-info/LICENSE.txt','worker/trace_vendor/licenses/sources.json') }
+    if ([string]$sourcePackage.version -cin @('1.1.0','1.2.0','1.3.0')) { $required += @('capture_tools.js','source/capture_service.js','source/capture_proxy.js','source/capture_ca.js','source/capture_review.js','source/capture_payload.js','source/delivered_payload.js','source/capture_state_trace.js','source/protocol_state.js','adapters/ghidra/deobfuscation_analysis.py','adapters/ghidra/deobfuscation_symbolic.py') }
+    if ([string]$sourcePackage.version -cin @('1.1.0','1.2.0','1.3.0')) { $required += @('source/trace_jobs.js','worker/ig5_trace.py','worker/trace_analysis.py','worker/requirements-trace.txt','worker/trace_vendor/ig5-manifest.json','worker/trace_vendor/NOTICE.txt','worker/trace_vendor/triton.cp312-win_amd64.pyd','worker/trace_vendor/triton_library-1.0.0rc4.dist-info/RECORD','worker/trace_vendor/triton_library-1.0.0rc4.dist-info/LICENSE.txt','worker/trace_vendor/licenses/sources.json') }
+    if ([string]$sourcePackage.version -cin @('1.2.0','1.3.0')) { $required += @('source/delegation_control.js','source/result_artifacts.js','source/function_batches.js','source/capability_catalog.js','source/json_output.js','adapters/ghidra/elf_addresses.py','adapters/ghidra/result_capture.py','docs/RELEASE_1.2.0.md') }
+    if ([string]$sourcePackage.version -ceq '1.3.0') { $required += 'docs/RELEASE_1.3.0.md' }
     if (-not $CoreOnly) { $required += 'third_party/sources/manifest.json' }
     foreach ($skill in @('ig5-triage','ig5-deep-dive','ig5-patch-and-sign','ig5-diff','ig5-debug-live','ig5-crypto','ig5-protocol')) { $required += "skills/$skill/SKILL.md" }
     foreach ($relative in $required) { if (-not (Test-IG5Path (Resolve-IG5PackPath $Root $relative) Leaf)) { throw "安装源缺少插件文件: $relative" } }
@@ -406,7 +427,9 @@ function Assert-IG5PluginSource {
         $files = @($release.files | Where-Object { ([string]$_.path).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object {
             @{path=([string]$_.path).Substring($prefix.Length);bytes=$_.bytes;sha256=$_.sha256}
         })
-        Assert-IG5FileInventory $Root $files 'plugin'
+        # A complete release must match its manifest, including unlisted root
+        # artifacts. The source-pack allowlist must not hide injected files here.
+        Assert-IG5FileInventory $Root $files 'plugin' -IncludeUnlistedRootFiles
     }
     Assert-IG5SourceAssets $Root
 }

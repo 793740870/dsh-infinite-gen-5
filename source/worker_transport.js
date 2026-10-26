@@ -11,10 +11,31 @@ function receiveLimits(value = {}) {
   return result;
 }
 
+// Workers (and any script an operator approves for them) must not inherit host secrets such as API
+// keys or tokens. Only what a Python/JVM/native process needs to start is forwarded; `IG5_*` carries
+// plugin configuration. Extra names can be allowed explicitly with cfg.workerEnvPassthrough.
+const WORKER_ENV_ALLOW = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR',
+  'USERPROFILE', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+  'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'COMMONPROGRAMFILES', 'COMMONPROGRAMFILES(X86)', 'COMMONPROGRAMW6432',
+  'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'OS', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME',
+  'LANG', 'LANGUAGE', 'TZ', 'USER', 'LOGNAME', 'SHELL',
+]);
+export function workerEnvironment(source = process.env, extra = []) {
+  if (!Array.isArray(extra) || extra.some(name => typeof name !== 'string' || !name)) throw new Error('workerEnvPassthrough must be an array of variable names');
+  const allowed = new Set([...WORKER_ENV_ALLOW, ...extra.map(name => name.toUpperCase())]);
+  const env = {};
+  for (const [name, value] of Object.entries(source)) {
+    const key = name.toUpperCase();
+    if (value !== undefined && (allowed.has(key) || key.startsWith('LC_') || key.startsWith('IG5_'))) env[name] = value;
+  }
+  return env;
+}
+
 /** Engine-specific paths/environment; the JSONL transport below is engine neutral. */
 export function workerLaunch(cfg, engine, pluginRoot) {
   const paths = ['linux', 'darwin'].includes(cfg.host?.platform) ? path.posix : path;
-  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  const env = { ...workerEnvironment(process.env, cfg.workerEnvPassthrough), PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
   const builtinReverse = engine === 'reverse' && cfg.reverseProvider === 'bundled';
   const provider = builtinReverse ? 'ghidra' : engine;
   let executable, args;

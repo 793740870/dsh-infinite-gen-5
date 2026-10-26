@@ -2,7 +2,7 @@
 from pathlib import Path
 import hashlib,json,os,re,subprocess,sys
 MAIN=Path(__file__).resolve().parents[1];OUT=Path(sys.argv[1]);OUT.mkdir(exist_ok=False)
-NODE=Path(r'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe')
+NODE=Path(r'C:\Users\IG5User\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe')
 PY=MAIN/'runtimes/ghidra/python/python.exe';skip={'runtimes','third_party','node_modules','.git','__pycache__'}
 syntax={'javascript':0,'python':0,'errors':[]}
 for directory,dirs,files in os.walk(MAIN):

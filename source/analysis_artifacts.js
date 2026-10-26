@@ -101,9 +101,17 @@ export class AnalysisArtifacts {
     // Reports and metadata are two files. A missing metadata commit is explicitly
     // unreadable, and listing never parses the much larger result payloads.
     const metaFile = path.join(this.directory('metadata'), `${id}.json`), metaStage = metaFile + '.partial';
-    fs.writeFileSync(metaStage, metaData, { flag: 'wx', mode: 0o600 });
-    try { fs.renameSync(metaStage, metaFile); } catch (error) { fs.unlinkSync(metaStage); throw error; }
-    this.historyIndex.saved(metadata, metaData);
+    let metadataCommitted = false;
+    try {
+      fs.writeFileSync(metaStage, metaData, { flag: 'wx', mode: 0o600 });
+      try { fs.renameSync(metaStage, metaFile); } catch (error) { fs.unlinkSync(metaStage); throw error; }
+      metadataCommitted = true;
+      this.historyIndex.saved(metadata, metaData);
+    } catch (error) {
+      // Keep the original Error while disclosing the first immutable commit.
+      error.analysisArtifactCommit = { id, sha256: metadata.recordSha256, recordSaved: true, metadataCommitted };
+      throw error;
+    }
     return value;
   }
   metadata(id, part) {
@@ -141,4 +149,20 @@ export class AnalysisArtifacts {
     finally { this.historyIndex.invalidate(); this.archivedIndex.invalidate(); }
   }
   dispose() { return Promise.all([this.historyIndex.dispose(), this.archivedIndex.dispose()]); }
+}
+
+/** Existing immutable stores only. No mkdir, indexes, writes or execution resources on a research read. */
+export class AnalysisArtifactReader {
+  constructor(root) {
+    this.root = path.resolve(root);
+    this.directoryIdentity = Object.fromEntries(['', 'blobs', 'records', 'metadata'].map(part => [part, actual(path.join(this.root, part), true)]));
+    const archived = path.join(this.root, 'archived-metadata');
+    if (fs.existsSync(archived)) this.directoryIdentity['archived-metadata'] = actual(archived, true);
+  }
+  directory(part) {
+    if (!this.directoryIdentity[part]) fail('ARTIFACT_CHANGED', 'Requested immutable store directory is absent');
+    return AnalysisArtifacts.prototype.directory.call(this, part);
+  }
+  read(ref, maximum) { return AnalysisArtifacts.prototype.read.call(this, ref, maximum); }
+  metadata(id, part) { return AnalysisArtifacts.prototype.metadata.call(this, id, part); }
 }

@@ -160,7 +160,7 @@ VMPBypass 提供“VM 状态/解释器与具体程序分开恢复”的方法；
 | P4 完整函数业务验收 | 返回证据、输出/内存等价、路径覆盖、独立参考与反例回路 | 冻结配置下完整函数合同通过；独立输入与路径、环境前提、异常和外部影响有相应证据；失败配置不混入通过 |
 | P5 自主性与稳定部署 | DSH 端到端自主流程、多版本配置回归、重复冷启动与故障恢复 | 不给逐段地址/语义预答案；真实配置模型自主修复并完成任务；安装 pins、权限门、取消/清理、重复运行和成本可复现 |
 
-P0 的实现范围是独立 case、纯 planner、只读 CLI 和 `ig5_profile recovery` 规划入口。它尚未连接自动执行或独立阶段/业务验收器；具体 schema、命令及代码入口以实现和测试为准。P0 能组织待验证义务，不能自行认证调用者提交的报告，也不能把 caller-claim、规划结果或框架文档提升为业务通过。
+P0 的实现范围是独立 case、纯 planner、只读 CLI 和 `ig5_recovery recovery` 规划入口。它尚未连接自动执行或独立阶段/业务验收器；具体 schema、命令及代码入口以实现和测试为准。P0 能组织待验证义务，不能自行认证调用者提交的报告，也不能把 caller-claim、规划结果或框架文档提升为业务通过。
 
 后续接入 DSH 必须显式使用真实 agent 上下文及已有工具/Goal 驱动，核对实际调用事件。planner 的下一步建议不得直接触发执行、模拟、调试、写入或远程操作；有这些效果的动作仍进入现有审批和所有权流程。
 
@@ -214,7 +214,7 @@ P0 首版代码已经存在：
 - `source/vm_recovery_case.js`：严格 `ig5-vm-recovery-case-v1` 合同、九阶段依赖、失败分类、case 与输入快照摘要。
 - `source/vm_recovery_plan.js`：纯规划器。派生当前工作视图、失效原因、依赖闭包、失败反馈及下一动作；不执行工具、不接受 caller 的 passed/verified 状态。
 - `source/vm_recovery_io.js`：有界文件核验与完整输入快照，CLI 与宿主使用同一读取路径。
-- `source/vm_recovery_profile.js`：已有 `ig5_profile` 内的独立只读入口、原始 case 摘要前置核验、不可变完整报告和有范围标记的模型预览。
+- `source/vm_recovery_profile.js`：已有 `ig5_recovery` 内的独立只读入口(原 `ig5_profile.recovery`)、原始 case 摘要前置核验、不可变完整报告和有范围标记的模型预览。
 - `scripts/plan_vm_recovery.mjs`：只读文件入口。稳定读取 case 和显式引用，逐项重验字节身份后调用规划器；不写任务文件、不访问网络、不启动子进程或目标。
 - `scripts/fixtures/vm_recovery_case.example.json`：尚未准入的 3.8 空白任务，未知字段保持 null；不含外部二进制或预置 ISA 答案。
 - `scripts/test_vm_recovery_plan.mjs`：独立的合同、陈旧/替换证据、依赖、失败路由、重复与文件读取回归。
@@ -243,4 +243,4 @@ Case 明确绑定 `caseId/objective/scope`。scope 包含目标、生产器、�
 
 Case 最多 256 KiB、128 个事件、64 个引用；每引用最多 8 MiB、声明引用合计最多 16 MiB。最多四项优先动作，其余明确列入 deferred；工程回归可在业务未完成时开展，最终 autonomy/deployment 门仍需完整业务与对应实际验收。原引擎/求解/采集预算保持独立。
 
-通过 DSH 调用时 `integration.dshPlanningEntry=ig5_profile.recovery`，纯 CLI 只报告自身没有调用宿主入口。`automaticExecution/stageVerifiers` 仍为 `not-connected`，所有阶段 `gateAccepted=false`，`completionAssessment` 始终未达成。规划入口的源码/SDK/部署/实际配置模型验收应分别记录；它们不能升级为自主业务恢复。下一主线是统一采集/阶段证据适配与自动 VM 角色推导，不再以增加更多固定 handler 案例替代。独立验证器接入后，才有资格根据真实证据推进阶段门。
+通过 DSH 调用时 `integration.dshPlanningEntry=ig5_recovery.recovery`，纯 CLI 只报告自身没有调用宿主入口。`automaticExecution/stageVerifiers` 仍为 `not-connected`，所有阶段 `gateAccepted=false`，`completionAssessment` 始终未达成。规划入口的源码/SDK/部署/实际配置模型验收应分别记录；它们不能升级为自主业务恢复。下一主线是统一采集/阶段证据适配与自动 VM 角色推导，不再以增加更多固定 handler 案例替代。独立验证器接入后，才有资格根据真实证据推进阶段门。

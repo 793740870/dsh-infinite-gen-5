@@ -2,7 +2,7 @@
 
 后续现代 VMP／Themida 对照和官方 VMP 3.11 自产控制采用独立 [MODERN_PROTECTION_CORPUS](MODERN_PROTECTION_CORPUS.md) 清单，保留本页原 93 个目标的独立证据，避免混算版本和恢复成绩。
 
-固定清单为 `scripts/fixtures/protection_corpus.json`；源码包只包含 URL、固定 commit、大小、SHA-256、Git blob ID 和派生来源。二进制、作者源码和压缩包保存在 `C:/Users/Administrator/.dsh/ig5/artifacts/corpus-expansion-20261014/corpus`，不随插件分发，不启动样本或上游脚本。
+固定清单为 `scripts/fixtures/protection_corpus.json`；源码包只包含 URL、固定 commit、大小、SHA-256、Git blob ID 和派生来源。二进制、作者源码和压缩包保存在 `C:/Users/IG5User/.dsh/ig5/artifacts/corpus-expansion-20261014/corpus`，不随插件分发，不启动样本或上游脚本。
 
 本轮清单 147 条资料记录，其中 93 个不同测试目标：14 个原生对照、38 个作者报告的保护目标、41 个保护方式尚未确认的官方挑战目标。后两组不能互相混称为已识别 VMP。93 个目标包含 14 个 APK；2 个原生文件被 Windows Defender 隔离，保留为未测试，不恢复或关闭防护。另有文档、原始／派生轨迹、压缩包及模型数据；它们不计入测试目标。
 
@@ -22,7 +22,7 @@ Tigress README 所述的 920 个实验输入不都在当前树中，实际只按
 ## 复现
 
 ```powershell
-$corpus = 'C:\Users\Administrator\.dsh\ig5\artifacts\corpus-expansion-20261014\corpus'
+$corpus = 'C:\Users\IG5User\.dsh\ig5\artifacts\corpus-expansion-20261014\corpus'
 node scripts\collect_learning_corpus.mjs scripts\fixtures\protection_corpus.json $corpus
 & '.\runtimes\ghidra\python\python.exe' -I -B scripts\prepare_protection_corpus.py scripts\fixtures\protection_corpus.json $corpus 'C:\Program Files\7-Zip\7z.exe'
 npm run test:protection-corpus

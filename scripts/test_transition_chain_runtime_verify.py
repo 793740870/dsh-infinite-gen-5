@@ -14,7 +14,7 @@ assert observed['passed'] and len(observed['cases'])==5
 accepted=[c for c in observed['cases'] if c['representation']=='transition-chain']
 image=BinaryImage.from_file(accepted[0]['args']['target']);vip=image.imagebase+0x846c4;table=image.imagebase+0x56098
 overrides={vip+i:v for i,v in enumerate(image.read(vip,40))};overrides.update({table+i:v for i,v in enumerate(image.read(table,1024))})
-previous=Path(r'C:\Users\Administrator\Desktop\无限五代\_research\entry-context-invariants-20261016-v1\init-composition-verified.json')
+previous=Path(r'C:\Users\IG5User\Desktop\无限五代\_research\entry-context-invariants-20261016-v1\init-composition-verified.json')
 old={c['applications']:c for c in json.loads(previous.read_bytes())['cases'] if not c['rejected']}
 rng=random.Random(0x7472616e736974);rows=[]
 for case in accepted:

@@ -1,4 +1,5 @@
 import { compareSemanticsAsync } from './semantic_diff_async.js';
+import { captureCffStateSource, admitCffStateSource } from './source/cff_state_workflow.js';
 
 export function defineAdvancedTools(mgr, cfg, render) {
   const targetProperty = { type: 'string', description: 'Opened target path; omit only when one active target is selected' };
@@ -17,10 +18,16 @@ export function defineAdvancedTools(mgr, cfg, render) {
       name, description,
       parameters: { type: 'object', properties: { target: targetProperty, ...properties }, required, additionalProperties: false },
       output: { schema: { type: 'object', additionalProperties: true }, render },
-      execute(args = {}) {
+      execute(args = {}, execution) {
         const selected = session(args);
         if (name === 'ig5_microcode' && args.action === 'deobfuscate' && selected.engine !== 'ghidra' && !(selected.engine === 'reverse' && cfg.reverseProvider !== 'commercial')) {
           throw new Error('deobfuscate requires the bundled Reverse or Ghidra provider');
+        }
+        if (name === 'ig5_microcode' && args.task_id !== undefined) {
+          if(typeof args.task_id!=='string'||args.task_id.length>64||args.action!=='deobfuscate')throw new Error('task_id capture requires an exact current task and action=deobfuscate');
+          if(!execution?.agent?.id)throw Object.assign(new Error('Source capture requires actual executing agent'),{code:'AGENT_SCOPE_REQUIRED'});
+          const before=admitCffStateSource(mgr,cfg,selected,args,execution),{task_id,...params}=args;
+          return Promise.resolve(mgr.rpc(selected,method,params,cfg.requestTimeoutMs)).then(result=>captureCffStateSource(mgr,cfg,selected,args,result,execution,before));
         }
         return mgr.rpc(selected, method, args, cfg.requestTimeoutMs);
       },
@@ -44,7 +51,8 @@ export function defineAdvancedTools(mgr, cfg, render) {
         max_blocks: { type: 'number' }, max_instructions: { type: 'number' },
         max_steps: { type: 'integer', minimum: 1, maximum: 250000, description: 'Deobfuscation work budget, default 100000; unfinished proofs are withheld.' },
         max_evidence: { type: 'integer', minimum: 1, maximum: 512, description: 'Maximum entries per deobfuscation evidence category, default 128.' },
-        rules: { type: 'array', items: { type: 'string', enum: ['xor-self', 'sub-self'] } } }),
+        rules: { type: 'array', items: { type: 'string', enum: ['xor-self', 'sub-self'] } },
+        task_id: {type:'string',description:'Explicit deobfuscate only: save a full immutable typed native SSA source in this current research task; returns sourceRef for workspace cff-state. No caller IR accepted.'} }),
     {
       name: 'ig5_bindiff',
       description: 'Compare two opened binary versions by normalized instructions, CFG neighborhoods, constants and call degree. Return scored function matches and changed basic blocks with ambiguity/truncation evidence. Heuristic patch candidates, not a claim of vulnerability or semantic equivalence. Read-only.',
@@ -64,8 +72,17 @@ export function defineAdvancedTools(mgr, cfg, render) {
         return { left: args.left, right: args.right, ...await compareSemanticsAsync(left, right, args, mgr.scope?.getStore()?.signal) };
       },
     },
-    rpcTool('ig5_emulate', 'emulate', 'Isolated x86/x64 or ARM64 function CPU emulation from a provider-supplied MemoryImage. Supported target architectures depend on the active provider and host runtime. Provide integer arguments, registers and memory buffers; capture return values and memory. No native process or OS/import emulation. Approval-gated; bounded time/instruction/memory budgets.',
-      { ea, name, abi: { type: 'string', enum: ['win64', 'sysv64', 'cdecl', 'stdcall', 'aapcs64'] },
+    rpcTool('ig5_emulate', 'emulate', 'Isolated x86/x64 or ARM64 function CPU emulation from a provider-supplied MemoryImage. Supported target architectures depend on the active provider and host runtime. Provide integer arguments, registers and memory buffers; capture return values and memory. No native process or OS/import emulation. Approval-gated; bounded time/instruction/memory budgets. mode=decode_strings (x86-64): finds routines that look like string/config decoders (a loop, byte-level arithmetic, memory writes, many callers), resolves the constants passed at each call site, emulates every call and returns the text the decoder wrote, each re-run once to confirm it reproduces (level E1: consistent with emulation, not proof of run-time behavior). Decoders that call imports or the OS are reported as unsupported, never as empty. Pass ea or name to force one decoder.',
+      { mode: { type: 'string', enum: ['function', 'decode_strings'], description: 'function (default): emulate one function. decode_strings: scan for decoders and decode their call sites.' },
+        min_calls: { type: 'number', description: 'decode_strings: minimum call sites for a decoder candidate, default 3' },
+        max_decoders: { type: 'number', description: 'decode_strings: decoders to try, best score first, default 16' },
+        max_runs: { type: 'number', description: 'decode_strings: total emulated calls, default 200' },
+        max_runs_per_decoder: { type: 'number', description: 'decode_strings: default 64' },
+        time_budget_ms: { type: 'number', description: 'decode_strings: wall-clock budget, default 30000' },
+        max_strings: { type: 'number', description: 'decode_strings: strings returned, default 500' },
+        min_text: { type: 'number', description: 'decode_strings: shortest text kept, default 4' },
+        max_size: { type: 'number', description: 'decode_strings: largest function considered a decoder, bytes, default 600' },
+        ea, name, abi: { type: 'string', enum: ['win64', 'sysv64', 'cdecl', 'stdcall', 'aapcs64'] },
         args: { type: 'array', items: { type: 'string' }, description: 'Integer arguments encoded as decimal or hex strings' },
         registers: { type: 'object', additionalProperties: { type: 'string' } },
         memory: { type: 'array', items: { type: 'object', properties: { ea, hex: { type: 'string' } }, required: ['ea', 'hex'], additionalProperties: false } },

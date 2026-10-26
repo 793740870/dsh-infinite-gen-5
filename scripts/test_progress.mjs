@@ -6,7 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const WORKSPACE = path.resolve(import.meta.dirname, '..');
-const IDA_DIR = process.env.IG5_IDA_DIR || 'C:\\Users\\Administrator\\Desktop\\IDA Professional 9.2';
+const IDA_DIR = process.env.IG5_IDA_DIR || 'C:\\Users\\IG5User\\Desktop\\IDA Professional 9.2';
 const target = process.argv[2];
 if (!target) {
   console.error('usage: node scripts/test_progress.mjs <targetBinary>');

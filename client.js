@@ -1,6 +1,6 @@
 (() => {
   try {
-    /* 无限五代 (dsh-infinite-gen-5) v1.1.0 专业无头逆向工程工作台
+    /* 无限五代 (dsh-infinite-gen-5) v1.3.0 专业无头逆向工程工作台
        视觉系统深度对齐 DeepSeek Harness「上下文」原生设计语言：
        - 全量采用官方 CSS 变量 tokens (--dsw-alias-*, --ds-*, tabular-nums)
        - 原生卡片容器 (.ig5-card)、统计磁贴 (.ig5-stat)、分段胶囊选择器 (.ig5-kinds / .ig5-gran-btn)
@@ -27,7 +27,8 @@
         var inject = ["slots"];
         var PLUGIN_ID = "dsh-infinite-gen-5";
         var PANEL_ID = "ig5-workbench-panel";
-        var VERSION = "1.1.0";
+        var VERSION = "1.3.0";
+        var PROJECT_URL = "https://github.com/Minglink/dsh-infinite-gen-5";
         var WORKBENCH_TAB_LABEL = "IG5 逆向工作台";
 
         /* ── 诊断回路 ── */
@@ -122,6 +123,28 @@
   color: var(--dsw-alias-label-secondary, #94a3b8);
   font-size: 12px;
   font-weight: 400;
+}
+.ig5-project-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 9px;
+  color: var(--dsw-alias-label-secondary, #94a3b8);
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.12));
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-decoration: none;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition: color var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease-in-out), border-color var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease-in-out), background var(--ds-transition-duration, .2s) var(--ds-ease-in-out, ease-in-out);
+}
+.ig5-project-link:hover, .ig5-project-link:focus-visible {
+  color: var(--dsw-alias-label-primary, #e2e8f0);
+  border-color: var(--dsw-alias-brand-primary, #60a5fa);
+  background: var(--dsw-alias-bg-layer-2, rgba(255, 255, 255, 0.05));
+  outline: none;
 }
 
 /* 统计磁贴栅格 (.lc-stat 对齐) */
@@ -574,10 +597,11 @@
         }
         function readData(type, target, params, engine, session) {
           var expected;
-          var captureRead = ["capture_status", "capture_history", "capture_detail"].indexOf(type) !== -1;
+          var captureRead = ["capture_status", "capture_history", "capture_detail", "knowledge"].indexOf(type) !== -1;
           try { expected = !captureRead && ["analyses", "analysis_result", "approvals", "debug_state"].indexOf(type) === -1 ? captureReadSnapshot(session) : null; }
           catch (error) { return Promise.reject(error); }
           var base = { type: type, target: target || "" };
+          if (type === "knowledge") delete base.target;
           if (!captureRead && (engine || ["analyses", "analysis_result"].indexOf(type) === -1)) base.engine = engine || "reverse";
           Object.keys(params || {}).forEach(function (key) { if (params[key] !== undefined && params[key] !== null) base[key] = params[key]; });
           if (expected) base.expected_snapshot = JSON.stringify(expected);
@@ -957,6 +981,7 @@
             activeTab === "listing" && el(Ig5ListingView, { key: viewKey, target: selectedTarget, engine: engine, session: currentSession, inputActions: props.inputActions }),
             activeTab === "scan" && el(Ig5ScanView, { key: viewKey, target: selectedTarget, engine: engine, session: currentSession }),
             activeTab === "analysis" && el(Ig5AnalysisView, { key: viewKey, target: selectedTarget, engine: engine, inputActions: props.inputActions }),
+            activeTab === "investigation" && el(Ig5InvestigationView, { key: viewKey, target: selectedTarget, engine: engine, session: currentSession, inputActions: props.inputActions }),
             activeTab === "capture" && el(Ig5CaptureView, { inputActions: props.inputActions }),
             activeTab === "patches" && el(Ig5PatchesView, { key: viewKey, target: selectedTarget, engine: engine }),
             activeTab === "runtime" && el(Ig5RuntimeView, { sessions: allSessions.filter(function (s) { return s.engine === "x64dbg"; }), refresh: feed && feed.now }),
@@ -1084,7 +1109,19 @@
               ),
               el(
                 "div",
-                { style: { display: "flex", alignItems: "center", gap: 8 } },
+                { style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 } },
+                el(
+                  "a",
+                  {
+                    className: "ig5-project-link",
+                    href: PROJECT_URL,
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    title: "在 GitHub 查看无限五代项目",
+                    "aria-label": "在 GitHub 查看无限五代项目（新标签页打开）"
+                  },
+                  "GitHub 项目 ↗"
+                ),
                 sessions.length > 1
                   ? el(
                       "select",
@@ -1179,6 +1216,7 @@
             { id: "listing", label: "📑 节段/符号/结构体", tag: null },
             { id: "scan", label: "🛡 熵与指纹侦测", tag: null },
             { id: "analysis", label: "🔐 解密与协议", tag: null },
+            { id: "investigation", label: "🔎 调查状态", tag: null },
             { id: "capture", label: "🌐 流量捕获", tag: null },
             { id: "patches", label: "⚡ 补丁审计与回滚", tag: null },
             { id: "runtime", label: "▶ 运行态（只读）", tag: null },
@@ -1274,7 +1312,7 @@
             readData("decompile", target, { ea: ea }, engine, props.session)
               .then(function (data) {
                 if (!current()) return;
-                setCode({ ea: data.ea, name: data.name, code: data.code || data.preview || "(空函数)", loading: false, error: null, generation: ticket, scope: scopeKey });
+                setCode({ ea: data.ea, name: data.name, addresses: data.addresses || null, code: data.code || data.preview || "(空函数)", loading: false, error: null, generation: ticket, scope: scopeKey });
               })
               .catch(function (e) { if (current()) setCode({ ea: ea, name: name, code: null, loading: false, error: String(e), generation: ticket, scope: scopeKey }); });
 
@@ -1441,7 +1479,9 @@
                   "div",
                   { className: "ig5-card-title-text" },
                   el("span", null, curCode.ea ? (curCode.name || "func") : "反编译与拓扑分析"),
-                  curCode.ea ? el("span", { className: "ig5-chip read ig5-mono" }, curCode.ea) : null
+                  curCode.ea ? el("span", { className: "ig5-chip read ig5-mono" }, curCode.ea) : null,
+                  curCode.addresses && curCode.addresses.status === "mapped" && curCode.addresses.space === "elf_vaddr"
+                    ? el("span", { className: "ig5-chip read ig5-mono" }, "ELF vaddr " + curCode.addresses.value) : null
                 ),
                 el(
                   "div",
@@ -2069,6 +2109,190 @@
             body.truncated ? el("p", { className: "ig5-card-sub", role: "status" }, "正文捕获已截断；保留的字节不代表完整报文。") : null,
             body.previewTruncated || preview.truncated || headers.truncated ? el("p", { className: "ig5-card-sub" }, "当前预览已截断，可通过导出读取已保留的正文。") : null);
         }
+        function Ig5InvestigationView(props) {
+          var pagePair = react.useState("overview"), page = pagePair[0], setPage = pagePair[1];
+          return el("div", null,
+            el("div", { className: "ig5-kinds", role: "group", "aria-label": "调查工作区" },
+              [{ id: "overview", label: "调查概览" }, { id: "knowledge", label: "研究资料与方法" }].map(function (tab) {
+                return el("button", { key: tab.id, className: "ig5-gran-btn" + (page === tab.id ? " ig5-gran-on" : ""), "aria-pressed": page === tab.id, onClick: function () { setPage(tab.id); } }, tab.label);
+              })),
+            page === "knowledge" ? el(Ig5KnowledgeView, props) : el(Ig5InvestigationOverview, props));
+        }
+        function Ig5KnowledgeView(props) {
+          var scope = JSON.stringify([props.target || "", props.engine || "", props.session && readIdentityFields.map(function (k) { return props.session[k]; })]);
+          var queryPair = react.useState(""), query = queryPair[0], setQuery = queryPair[1];
+          var kindPair = react.useState("methods"), kind = kindPair[0], setKind = kindPair[1];
+          var categoryPair = react.useState(""), category = categoryPair[0], setCategory = categoryPair[1];
+          var listPair = react.useState(null), list = listPair[0], setList = listPair[1];
+          var detailPair = react.useState(null), detail = detailPair[0], setDetail = detailPair[1];
+          var draftPair = react.useState(null), draft = draftPair[0], setDraft = draftPair[1];
+          var notePair = react.useState(""), note = notePair[0], setNote = notePair[1];
+          var gate = react.useRef(makeRequestGate()), detailGate = react.useRef(makeRequestGate()), owner = react.useRef(scope);
+          if (owner.current !== scope) { owner.current = scope; gate.current.next(); detailGate.current.next(); }
+          var visibleList = list && list.scope === scope ? list : null;
+          var visible = detail && detail.scope === scope ? detail : null;
+          var visibleDraft = draft && draft.scope === scope && visible && draft.sha256 === visible.ref.sha256 ? draft.text : "";
+          function search(offset, previous, selectedKind) {
+            var ticket = gate.current.next(); detailGate.current.next(); setDetail(null); setDraft(null); setNote("");
+            var selected = selectedKind || kind;
+            var request = previous ? Object.assign({}, previous, { offset: offset }) : { action: selected === "documents" ? "documents" : query.trim() ? "search" : "methods", query: query.trim() || undefined, category: selected === "documents" ? undefined : category || undefined, limit: 5, offset: 0 };
+            setList({ scope: scope, loading: true, request: request, items: [] });
+            readData("knowledge", "", request).then(function (data) {
+              if (gate.current.isCurrent(ticket)) setList(Object.assign({}, data, { scope: scope, request: Object.assign({}, request, { generation: data.generation }) }));
+            }).catch(function (e) { if (gate.current.isCurrent(ticket)) setList({ scope: scope, request: request, items: [], error: String(e.message || e) }); });
+          }
+          react.useEffect(function () { search(0); return function () { gate.current.next(); detailGate.current.next(); }; }, [scope]);
+          function choose(ref, cursor) {
+            var ticket = detailGate.current.next(), old = cursor ? visible : null;
+            setDraft(null); setNote(""); setDetail({ scope: scope, ref: ref, loading: true });
+            readData("knowledge", "", { action: "read", id: ref.id, sha256: ref.sha256, cursor: cursor }).then(function (data) {
+              if (!detailGate.current.isCurrent(ticket)) return;
+              if (!data.ref || data.ref.id !== ref.id || data.ref.sha256 !== ref.sha256 || old && (data.offset !== old.nextOffset || data.generation !== old.generation || data.bodySha256 !== old.bodySha256)) throw new Error("资料分页或版本已变化，请重新选择方法");
+              setDetail(Object.assign({}, data, { scope: scope, body: (old ? old.body : "") + data.body }));
+            }).catch(function (e) { if (detailGate.current.isCurrent(ticket)) setDetail({ scope: scope, ref: ref, error: String(e.message || e) }); });
+          }
+          function generateDraft() {
+            if (!visible || !visible.metadata || visible.nextCursor) return;
+            var context = { target: props.target || null, engine: props.engine || null, researchRecordState: visible.recordState || "reference-only", researchStateReason: visible.stateReason || null, observedScope: props.session ? Object.fromEntries(readIdentityFields.map(function (k) { return [k, props.session[k] === undefined ? null : props.session[k]]; })) : null };
+            var value = "请先回读并核对下列研究资料，再结合当前调查列出已满足、缺失及冲突前提，提出可验证的下一步。资料本身不证明当前样本结论，执行仍通过原工具入口。\n"
+              + JSON.stringify({ tool: "ig5_profile", arguments: { knowledge: { action: "read", ref: visible.ref } }, context: context }, null, 2);
+            setDraft({ scope: scope, sha256: visible.ref.sha256, text: value });
+          }
+          function insert() {
+            if (!visibleDraft || owner.current !== scope) return;
+            try {
+              var actions = props.inputActions;
+              if (!actions || typeof actions.captureInsertion !== "function" || typeof actions.insertText !== "function") { setNote("请复制草稿到会话核对后发送。"); return; }
+              var span = actions.captureInsertion();
+              if (!actions.insertText("\n" + visibleDraft + "\n", span)) { setNote("编辑器内容已变化，请重新插入。"); return; }
+              if (typeof actions.persistDraft === "function") actions.persistDraft();
+              setNote("已插入草稿，尚未发送或执行。");
+            } catch (e) { setNote(String(e.message || e)); }
+          }
+          var labels = { mba: "MBA / 位向量", "control-flow": "控制流", vm: "虚拟化保护", workflow: "研究方法", homology: "同源与类型", crypto: "加密与评测" };
+          var isDocument = visible && visible.metadata && ["ig5-source-document-v1", "ig5-source-document-v2"].indexOf(visible.metadata.schema) !== -1;
+          var sources = visible && visible.metadata ? isDocument ? [{ url: visible.metadata.sourceUrl, label: visible.metadata.author }] : visible.metadata.sources.map(function (source) { return { url: source.url, label: (source.repo || source.author || source.type) + (source.commit ? " · " + source.commit.slice(0, 12) : "") }; }) : [];
+          return el("div", null,
+            el("section", { className: "ig5-card" },
+              el("div", { className: "ig5-card-title" }, el("b", null, "研究资料与方法"), el("span", { className: "ig5-card-sub" }, "按需查询 · 本地资料")),
+              el("p", { className: "ig5-card-sub" }, "按需查阅方法与原文，核对前提后再验证。"),
+              el("div", { className: "ig5-kinds", role: "group", "aria-label": "资料类型" }, ["methods", "documents"].map(function (value) { return el("button", { key: value, className: "ig5-gran-btn" + (kind === value ? " ig5-gran-on" : ""), "aria-pressed": kind === value, onClick: function () { setKind(value); search(0, null, value); } }, value === "methods" ? "方法" : "原文"); })),
+              el("div", { className: "ig5-form-row" },
+                el("input", { className: "ig5-input", "aria-label": "检索研究方法", placeholder: "MBA、控制流平坦化、VIP、加密…", maxLength: 256, value: query, onChange: function (e) { setQuery(e.target.value); }, onKeyDown: function (e) { if (e.key === "Enter") search(0); } }),
+                kind === "methods" ? el("select", { className: "ig5-input", "aria-label": "研究方法类别", value: category, onChange: function (e) { setCategory(e.target.value); } }, el("option", { value: "" }, "全部类别"), Object.keys(labels).map(function (key) { return el("option", { key: key, value: key }, labels[key]); })) : null,
+                el("button", { className: "ig5-btn", onClick: function () { search(0); } }, kind === "documents" ? "检索原文" : "检索方法"))),
+            el("div", { className: "ig5-cols" },
+              el("section", { className: "ig5-card ig5-col", style: { flex: "1 1 280px", minWidth: 0 }, "aria-label": "研究方法列表" },
+                visibleList && visibleList.loading ? el("p", { role: "status" }, "检索研究资料…") : null,
+                visibleList && visibleList.error ? el("p", { className: "ig5-error", role: "alert" }, visibleList.error) : null,
+                visibleList && !visibleList.loading && !visibleList.error ? el("p", { className: "ig5-card-sub" }, "本次查询 " + (visibleList.request.query || (kind === "documents" ? "全部原文" : "全部方法")) + " · " + visibleList.total + " 项") : null,
+                (visibleList && visibleList.items || []).map(function (row) { return el("button", { key: row.ref.id, className: "ig5-btn", style: { display: "block", width: "100%", textAlign: "left", marginBottom: 8, whiteSpace: "normal" }, onClick: function () { choose(row.ref); } },
+                  el("b", null, row.title), el("div", { className: "ig5-card-sub" }, row.kind === "document" ? row.author + (row.contentKind === "original-note" ? " · 原创笔记" : " · 原文") : labels[row.category] + " · " + (row.integration === "research-only" ? "算法待接入" : "方法参考")),
+                  row.matchedTerms && row.matchedTerms.length ? el("div", { className: "ig5-card-sub" }, "命中：" + row.matchedTerms.join("、")) : null); }),
+                visibleList && !visibleList.loading && !visibleList.error && !visibleList.items.length ? el("p", null, "本索引未命中；可尝试其他术语。空结果不表示不存在相关研究。") : null,
+                visibleList && !visibleList.loading && !visibleList.error ? el("div", { className: "ig5-form-row" },
+                  el("button", { className: "ig5-btn", disabled: !visibleList.offset, onClick: function () { search(Math.max(0, visibleList.offset - 5), visibleList.request); } }, kind === "documents" ? "上一页原文" : "上一页方法"),
+                  el("button", { className: "ig5-btn", disabled: visibleList.nextOffset === null, onClick: function () { search(visibleList.nextOffset, visibleList.request); } }, kind === "documents" ? "下一页原文" : "下一页方法")) : null),
+              el("section", { className: "ig5-card ig5-col", style: { flex: "2 1 360px", minWidth: 0 }, "aria-label": "研究方法详情" },
+                !visible ? el("p", { className: "ig5-card-sub" }, "选择方法，查看原始说明、适用前提与验证要求。") : null,
+                visible && visible.loading ? el("p", { role: "status" }, "读取固定版本资料…") : null,
+                visible && visible.error ? el("p", { className: "ig5-error", role: "alert" }, visible.error) : null,
+                visible && visible.metadata ? el("div", null,
+                  el("b", null, visible.metadata.title),
+                  visible.recordState && visible.recordState !== "active" ? el("p", { className: "ig5-error", role: "status" }, (visible.recordState === "withdrawn" ? "此资料已撤回：" : "此资料已有新版：") + visible.stateReason + "；当前显示历史原件。") : null,
+                  el("p", { className: "ig5-card-sub" }, isDocument ? visible.metadata.author + (visible.metadata.contentKind === "original-note" ? " · 原创笔记 · " : " · 研究原文 · ") + visible.metadata.license : "方法笔记 · " + (visible.metadata.integration === "research-only" ? "算法待接入" : "通过原工具核对")),
+                  el("p", { className: "ig5-card-sub", "aria-label": "资料来源状态" }, "来源状态：" + (visible.recordState || "reference-only") + " · " + (visible.generation || "固定内置版本") + " · " + (visible.nextCursor ? "正文尚未读完" : "正文已完整读取") + "；资料不构成当前目标验证。"),
+                  isDocument ? el("details", null, el("summary", null, "阅读提示"), visible.metadata.reviewNotes.map(function (note, index) { return el("p", { key: index, className: "ig5-card-sub" }, note); })) : null,
+                  el("pre", { className: "ig5-mono", style: { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, visible.body),
+                  visible.nextCursor ? el("button", { className: "ig5-btn", onClick: function () { choose(visible.ref, visible.nextCursor); } }, isDocument ? "继续读取原文" : "继续读取方法正文") : el("p", { className: "ig5-card-sub" }, isDocument ? "原文已读完" : "方法正文已读完"),
+                  el("p", { className: "ig5-card-sub" }, "上游来源（外链）"),
+                  sources.map(function (source, index) { var safe = false; try { var sourceUrl = new URL(source.url); safe = sourceUrl.protocol === "https:" && !sourceUrl.username && !sourceUrl.password; } catch (e) {} return el("div", { key: index }, safe ? el("a", { href: source.url, target: "_blank", rel: "noopener noreferrer", referrerPolicy: "no-referrer" }, source.label) : el("span", null, "来源地址不可用")); }),
+                  visible.relatedReferences && visible.relatedReferences.length ? el("div", { style: { marginTop: 10 } }, el("span", { className: "ig5-card-sub" }, isDocument ? "关联方法 " : "参考原文 "), visible.relatedReferences.map(function (related) { return el("button", { key: related.ref.id, className: "ig5-btn", style: { margin: "0 4px 4px 0", whiteSpace: "normal", textAlign: "left" }, onClick: function () { choose(related.ref); } }, related.title); })) : null,
+                  el("details", null, el("summary", null, "完整引用与验证边界"), el("pre", { className: "ig5-mono", style: { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, JSON.stringify({ ref: visible.ref, bodySha256: visible.bodySha256, generation: visible.generation, metadata: visible.metadata }, null, 2))),
+                  el("button", { className: "ig5-btn", disabled: !!visible.nextCursor, onClick: generateDraft }, "生成方法应用草稿")) : null)),
+            visibleDraft ? el("section", { className: "ig5-card" }, el("textarea", { className: "ig5-textarea ig5-mono", "aria-label": "研究方法草稿", value: visibleDraft, onChange: function (e) { setDraft({ scope: scope, sha256: visible.ref.sha256, text: e.target.value }); } }), el("button", { className: "ig5-btn", onClick: insert }, "插入方法草稿（待发送）")) : null,
+            note ? el("p", { role: "status" }, note) : null);
+        }
+        function Ig5InvestigationOverview(props) {
+          var scope = JSON.stringify([props.target, props.engine, props.session && readIdentityFields.map(function (k) { return props.session[k]; })]);
+          var listPair = react.useState(null), list = listPair[0], setList = listPair[1];
+          var selectedPair = react.useState(null), selected = selectedPair[0], setSelected = selectedPair[1];
+          var detailPair = react.useState(null), detail = detailPair[0], setDetail = detailPair[1];
+          var errorPair = react.useState(""), error = errorPair[0], setError = errorPair[1];
+          var draftPair = react.useState(null), draft = draftPair[0], setDraft = draftPair[1];
+          var gate = react.useRef(makeRequestGate());
+          var owner = react.useRef(scope);
+          if (owner.current !== scope) { owner.current = scope; gate.current.next(); }
+          var visibleList = list && list.scope === scope ? list.data : null;
+          var visible = detail && detail.scope === scope && selected && selected.scope === scope
+            && detail.data.taskId === selected.id && detail.data.snapshot.taskRevision === selected.revision ? detail.data : null;
+          var visibleDraft = visible && draft && draft.stamp === JSON.stringify(visible.snapshot) ? draft.text : "";
+          function refresh() {
+            var ticket = gate.current.next(); setSelected(null); setDetail(null); setDraft(null); setList(null); setError("");
+            if (!props.target) return;
+            readData("investigation", props.target, { action: "list" }, props.engine, props.session).then(function (data) {
+              if (gate.current.isCurrent(ticket)) setList({ scope: scope, data: data });
+            }).catch(function (e) { if (gate.current.isCurrent(ticket)) setError(String(e.message || e)); });
+          }
+          react.useEffect(function () { refresh(); return function () { gate.current.next(); }; }, [scope]);
+          function choose(task) {
+            var ticket = gate.current.next(); setSelected({ scope: scope, id: task.taskId, revision: task.taskRevision }); setDetail(null); setDraft(null); setError("");
+            readData("investigation", props.target, { action: "brief", id: task.taskId, task_revision: task.taskRevision }, props.engine, props.session).then(function (data) {
+              if (gate.current.isCurrent(ticket)) setDetail({ scope: scope, data: data });
+            }).catch(function (e) { if (gate.current.isCurrent(ticket)) setError(String(e.message || e)); });
+          }
+          async function insert() {
+            if (!visibleDraft) return;
+            var insertionTicket = gate.current.next();
+            try {
+              var fresh = await readData("investigation", props.target, { action: "brief", id: visible.taskId, task_revision: visible.snapshot.taskRevision }, props.engine, props.session);
+              if (!gate.current.isCurrent(insertionTicket) || owner.current !== scope) return;
+              if (fresh.taskId !== visible.taskId || JSON.stringify(fresh.snapshot) !== JSON.stringify(visible.snapshot)) throw new Error("调查状态已变化，请刷新后重新生成草稿");
+              var actions = props.inputActions;
+              if (!actions || typeof actions.captureInsertion !== "function" || typeof actions.insertText !== "function") throw new Error("请复制草稿到会话核对后发送");
+              var span = actions.captureInsertion();
+              if (!actions.insertText("\n" + visibleDraft + "\n", span)) throw new Error("编辑器内容已变化，请重新插入");
+              if (typeof actions.persistDraft === "function") actions.persistDraft();
+              setError("已插入草稿，尚未发送或执行。");
+            } catch (e) { setError(String(e.message || e)); }
+          }
+          function block(title, data, lines) {
+            return el("section", { className: "ig5-card", "aria-label": title }, el("b", null, title),
+              (lines || []).map(function (line, index) { return el("p", { key: index }, line); }),
+              el("details", null, el("summary", null, "完整状态与来源"),
+                el("pre", { className: "ig5-mono", style: { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, JSON.stringify(data, null, 2))));
+          }
+          return el("div", null,
+            el("button", { className: "ig5-btn", onClick: refresh }, "刷新调查状态"),
+            el("p", { className: "ig5-card-sub" }, "当前任务快照；任务、研究或数据库修订变化后请刷新。局部验证只适用于报告注明的属性与范围。"),
+            error ? el("p", { role: "status" }, error) : null,
+            visibleList ? (visibleList.tasks || []).map(function (task) { return el("button", { key: task.taskId, className: "ig5-btn", onClick: function () { choose(task); } }, task.goal || task.taskId); }) : null,
+            visible ? el("div", null,
+              block("问题与验收范围", { question: visible.question, acceptance: visible.acceptance, snapshot: visible.snapshot },
+                [visible.question || "尚未填写调查问题", "验收：" + (visible.acceptance && visible.acceptance.status || "not-assessed") + "；任务修订：" + visible.snapshot.taskRevision]),
+              block("事实、假设与未知", { observations: visible.observations, claims: visible.claims, research: visible.research, unknowns: visible.unknowns },
+                ["当前有效观察 " + (visible.observations || []).length + " 项；未知 " + (visible.unknowns || []).length + " 项。",
+                  visible.claims && visible.claims.hypothesis ? "调用者假设：" + visible.claims.hypothesis : "尚无调用者假设。",
+                  visible.research ? "已有研究状态，合同、假设和未决义务见完整状态。" : "尚未建立结构化研究状态。"]),
+              block("证据与完整报告引用", { stale: visible.staleEvidence, refs: visible.evidenceRefs, omitted: visible.omitted, nextCursor: visible.nextCursor, fullTask: visible.taskRef },
+                ["报告引用 " + (visible.evidenceRefs || []).length + " 项；过期证据 " + (visible.staleEvidence || []).length + " 项。"].concat((visible.evidenceRefs || []).slice(0, 8).map(function (ref) {
+                  return (ref.function && (ref.function.name || ref.function.ea) || ref.reportId || ref.snapshotId) + "：" + (ref.stale ? "已过期（" + (ref.staleReasons || []).join("、") + "）" : "当前引用") + "；完整性 " + (ref.reportIntegrity || "unknown");
+                })).concat((visible.evidenceRefs || []).length > 8 ? ["其余引用见完整状态；省略不代表已核验。"] : [])),
+              block("下一实验与原因", visible.nextExperiments,
+                (visible.nextExperiments || []).slice(0, 3).map(function (experiment, index) { return (index + 1) + ". " + (experiment.rationale || experiment.kind || "读取完整实验说明"); })),
+              el("section", { className: "ig5-card", "aria-label": "研究建议与条件" }, el("b", null, "研究建议与条件"),
+                el("p", { className: "ig5-card-sub" }, "按需生成核对草稿。条件采用 true / false / unknown；建议和候选均需原工具独立验证。"),
+                [{label:"生成实验建议草稿",request:{action:"experiment-shadow",mode:"shadow"}}, {label:"生成方法条件草稿",request:{action:"method-registry"}}, {label:"生成私有来源核对草稿",request:{action:"case-status"}}].map(function (item) { return el("button", {key:item.label,className:"ig5-btn",onClick:function(){setDraft({stamp:JSON.stringify(visible.snapshot),text:"核对当前任务、合同与来源后读取；不执行实验：\n"+JSON.stringify({tool:"ig5_workspace",arguments:{target:props.target,engine:props.engine,workspace:Object.assign({id:visible.taskId},item.request)}},null,2)});}},item.label); })),
+              block("工作、验收与资源清理", { work: visible.workStatus, acceptance: visible.acceptance, cleanup: visible.resourceStatus, failures: visible.recentFailures },
+                ["工作：" + (visible.workStatus || "unknown") + "；验收：" + (visible.acceptance && visible.acceptance.status || "not-assessed") + "；资源清理：" + (visible.resourceStatus || "unknown"),
+                  "最近失败 " + (visible.recentFailures || []).length + " 项；失败原因和完整来源见完整状态。"]),
+              (visible.nextExperiments || []).filter(function (x) { return x.request; }).map(function (x, i) { return el("button", { key: i, className: "ig5-btn", onClick: function () {
+                setDraft({ stamp: JSON.stringify(visible.snapshot), text: "核对当前调查身份与修订后，通过原工具入口继续：\n" + JSON.stringify(x.request, null, 2) });
+              } }, "生成实验草稿 " + (i + 1)); }),
+              visibleDraft ? el("div", null, el("textarea", { className: "ig5-textarea", "aria-label": "调查实验草稿", value: visibleDraft, onChange: function (e) { setDraft({ stamp: JSON.stringify(visible.snapshot), text: e.target.value }); } }),
+                el("button", { className: "ig5-btn", onClick: insert }, "插入调查草稿（待发送）")) : null) : null);
+        }
+
         function Ig5CaptureView(props) {
           var statusPair = react.useState({ data: null, loading: false, error: "" }), status = statusPair[0], setStatus = statusPair[1];
           var historyPair = react.useState({ items: [], offset: 0, ready: false }), history = historyPair[0], setHistory = historyPair[1];
@@ -2302,6 +2526,28 @@
           return buildAnalysisDraft(kind, kind === "crypto" ? "transform" : "decode", input, JSON.stringify(parameters), association.target, association.engine);
         }
 
+        function FusionEvidence(props) {
+          var report=props.report||{},v=report.fusion&&report.fusion.value||report.value||{},s=v.summary||{},schema=v.schema||"",rows=[],title=null;
+          function short(x){return typeof x==="string"?x.slice(0,180):Number.isSafeInteger(x)?String(x):"未提供";}
+          function count(x){return Array.isArray(x)?x.length:"未提供";}
+          if(schema==="ig5-cff-state-report-v1"||schema==="ig5-cff-report-v1"){
+            title="跨块状态与原图对照";rows.push(["原图", "全部块与边保留；状态写未删除"],["路线", "保存时核验 "+short(s.verifiedRoutes===undefined?s.verifiedConditions:s.verifiedRoutes)+"；仅报告注明的条件范围"],["竞争变量",short(count(s.competingVariables||s.stateDependencies&&s.stateDependencies.competingVariables))+"；唯一状态变量未确认"]);
+            (s.routes||[]).slice(0,8).forEach(function(r){rows.push(["入口 "+short(r.predecessor)+" → "+short(r.dispatcher),short(r.destination)+" · "+short(r.status)+" · "+short(r.condition)]);});
+          }else if(schema==="ig5-small-vm-check-v1"||schema==="ig5-vm-instance-comparison-v1"){
+            title="VM 实例与有限合同";(v.identities||[]).slice(0,8).forEach(function(i,n){rows.push(["实例 "+n,i.complete?short(i.id):"未知："+(i.missing||[]).join("、")]);});
+            (v.pairs||[]).slice(0,8).forEach(function(p){rows.push(["比较 "+p.a+" / "+p.b,short(p.status)+" · "+(p.differences||[]).join("、")]);});
+            (v.checks||[]).slice(0,8).forEach(function(c){rows.push(["有限检查 "+short(c.index),short(c.status)+" · "+short(c.cases)+" 组 · HALT初始结果敏感："+(c.initialResultSensitivity===true?"是":c.initialResultSensitivity===false?"否":"未知")]);});
+          }else if(/bitvector|bv-provider|candidate/.test(schema)){
+            title="原式与候选验证";rows.push(["保存状态",short(v.status||v.provider&&v.provider.result&&v.provider.result.status)],["候选身份",short(v.providerId||v.provider&&v.provider.identity&&v.provider.identity.id||v.version)],["原式节点",short(v.original&&count(v.original.nodes))],["候选节点",short(v.candidate&&count(v.candidate.nodes)||v.provider&&v.provider.result&&v.provider.result.candidate&&count(v.provider.result.candidate.nodes))],["验证范围","纯位向量与明确前提；不代表CPU或整个函数"],["来源",short(v.sourceRef&&v.sourceRef.id||v.contractRef&&v.contractRef.id)]);
+          }else if(schema==="ig5-applicability-receipt-v1"||schema==="ig5-experiment-shadow-v1"){
+            title="建议与适用条件";rows.push(["方法",short(v.methodId)],["保存状态",short(v.status)]);Object.keys(v.predicates||{}).slice(0,16).forEach(function(k){rows.push([k,short(v.predicates[k].value)+" · "+short(v.predicates[k].reason)]);});
+          }
+          if(!title)return null;
+          return el("section",{className:"ig5-card","aria-label":"融合研究结果"},el("b",null,title),el("p",{className:"ig5-card-sub",role:"status"},"已保存的历史摘要；当前任务、合同、数据库与实现尚未重绑。此页只读，不执行实验。"),
+            report.responseTruncated||report.fusion&&report.fusion.responseTruncated?el("p",{className:"ig5-card-sub"},"预览有省略；缺失项保持未知，完整字段须按报告引用回读。 "):null,
+            el("table",{className:"ig5-table"},el("thead",null,el("tr",null,el("th",null,"项目"),el("th",null,"保存时结果与边界"))),el("tbody",null,rows.map(function(r,n){return el("tr",{key:n},el("td",null,r[0]),el("td",{style:{overflowWrap:"anywhere"}},r[1]));}))),
+            el("p",{className:"ig5-card-sub"},"来源报告："+short(report.id)+"；native / 整函数 / VM角色 / 业务验收均未由此升级。"));
+        }
         function AnalysisEvidence(props) {
           var report = props.report, value = report.value || {}, inference = value.inference, recovery = value.recovery;
           var candidates = (inference || recovery || {}).candidates || [];
@@ -2327,6 +2573,7 @@
               report.responseTruncated === true ? el("p", { className: "ig5-card-sub" }, "当前报告预览已截断；缺失字段显示为未提供，请按报告 ID 读取完整字段。") : null);
           }
           return el("div", { className: "ig5-card" },
+            el(FusionEvidence,{report:report}),
             el("div", { className: "ig5-card-title-text" }, stateSummary ? "协议状态观察与验证" : "候选、验证与字节证据"),
             stateSummary,
             inference && inference.coverage ? el("p", { className: "ig5-card-sub", role: "status" }, "分析覆盖: " + inference.coverage.status + " · 已分析 " + inference.coverage.analyzedGroups + " / " + inference.coverage.eligibleGroups + " 组 · 跳过 " + inference.coverage.skippedGroups + (inference.coverage.previewTruncated ? " · 预览另有省略" : "")) : null,
@@ -2353,7 +2600,7 @@
           var selectedPair = react.useState(null), selected = selectedPair[0], setSelected = selectedPair[1];
           var resultPair = react.useState(null), result = resultPair[0], setResult = resultPair[1];
           var pagePair = react.useState({ scope: null, offset: 0 }), page = pagePair[0], setPage = pagePair[1];
-          var scope = (all ? "all" : (props.engine || "reverse") + "\n" + normalizedTarget(props.target)) + "\n" + (archived ? "archived" : "active");
+          var scope = (all ? "all" : (props.engine || "reverse") + "\n" + normalizedTarget(props.target)) + "\n" + (archived ? "archived" : "active") + "\n" + JSON.stringify([props.target,props.engine,props.session&&readIdentityFields.map(function(k){return props.session[k];})]);
           var offset = page.scope === scope ? page.offset : 0, listScope = scope + "\n" + offset;
           var listGate = react.useRef(makeRequestGate()), resultGate = react.useRef(makeRequestGate()), currentScope = react.useRef(scope);
           var currentListScope = react.useRef(listScope);
@@ -2499,7 +2746,7 @@
             "ig5_doctor", "ig5_open", "ig5_status", "ig5_funcs", "ig5_strings",
             "ig5_decompile", "ig5_xrefs", "ig5_calls", "ig5_bytes", "ig5_search",
             "ig5_listing", "ig5_scan", "ig5_export_diff", "ig5_cfg", "ig5_slice", "ig5_fingerprint",
-            "ig5_stack", "ig5_switches", "ig5_vtables", "ig5_microcode", "ig5_bindiff", "ig5_ir", "ig5_crypto", "ig5_protocol", "ig5_capture"
+            "ig5_stack", "ig5_switches", "ig5_vtables", "ig5_microcode", "ig5_bindiff", "ig5_ir", "ig5_crypto", "ig5_protocol", "ig5_package", "ig5_capture"
           ];
           var writeTools = [
             "ig5_rename", "ig5_patch_bytes", "ig5_comment", "ig5_analyze",
@@ -2679,11 +2926,15 @@
         exports.__test = { normalizeScan: normalizeScan, buildAnalysisDraft: buildAnalysisDraft, ScanView: Ig5ScanView, AnalysisDraft: AnalysisDraft, AnalysisView: Ig5AnalysisView, cfgFitCamera: cfgFitCamera, EnvironmentCard: Ig5EnvironmentCard, cfgPinchStart: cfgPinchStart, cfgPinchCamera: cfgPinchCamera, engineName: engineName, sessionIdentity: sessionIdentity, parseWorkbenchFocus: parseWorkbenchFocus, layoutCfg: layoutCfg, highlightParts: highlightParts, renderCodeLines: renderCodeLines, normalizeAudit: normalizeAudit, normalizedTarget: normalizedTarget, buildStructDraft: buildStructDraft, makeRequestGate: makeRequestGate, CfgGraph: CfgGraph, StructEditor: StructEditor, FunctionsView: Ig5FunctionsView, StringsView: Ig5StringsView, ListingView: Ig5ListingView, PatchesView: Ig5PatchesView, RuntimeView: Ig5RuntimeView, IrView: Ig5IrView, OverviewCard: Ig5OverviewCard, Workbench: Ig5Workbench };
         exports.__test.analysisReuseDraft = analysisReuseDraft;
         exports.__test.AnalysisEvidence = AnalysisEvidence;
+        exports.__test.FusionEvidence = FusionEvidence;
         exports.__test.normalizeReadData = normalizeReadData;
         exports.__test.readData = readData;
         exports.__test.captureReadSnapshot = captureReadSnapshot;
         exports.__test.ToolsMatrixView = Ig5ToolsMatrixView;
         exports.__test.CaptureView = Ig5CaptureView;
+        exports.__test.InvestigationView = Ig5InvestigationOverview;
+        exports.__test.ResearchWorkspace = Ig5InvestigationView;
+        exports.__test.KnowledgeView = Ig5KnowledgeView;
         exports.__test.CaptureMessage = CaptureMessage;
         exports.__test.buildCaptureDraft = buildCaptureDraft;
         exports.__test.capturePreview = capturePreview;

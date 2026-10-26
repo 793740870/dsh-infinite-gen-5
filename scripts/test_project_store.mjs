@@ -25,6 +25,40 @@ function fixture(t) {
 const fails = (fn, code) => assert.throws(fn, error => error.code === code);
 const attach = (store, identity, sessionId, extra = {}) => store.attachEngine({ projectId: identity.projectId, artifactId: identity.artifactId, engine: 'reverse', sessionId, ...extra });
 const storeModule = new URL('../source/project_store.js', import.meta.url).href;
+test('publication failure retains old bytes and original error; release failure reports committed metadata', t => {
+  const { store, target } = fixture(t);
+  store.open(target);
+  const before = fs.readFileSync(store.file);
+  const rename = fs.renameSync;
+  const denied = Object.assign(new Error('injected publish denial'), { code: 'EPERM' });
+  fs.renameSync = (from, to) => { if (to === store.file) throw denied; return rename(from, to); };
+  try {
+    assert.throws(() => store._write(data => { data.injected = true; }), error => error === denied && error.metadataPublished === false && error.metadataStage === 'publish');
+  } finally { fs.renameSync = rename; }
+  assert.deepEqual(fs.readFileSync(store.file), before);
+  assert.equal(fs.existsSync(store.lockFile), false);
+  assert.equal(fs.readdirSync(store.root).some(name => name.endsWith('.tmp')), false);
+  const release = store._releaseLock;
+  let owner;
+  const cleanupError = Object.assign(new Error('injected lock release denial'), { code: 'EPERM' });
+  store._releaseLock = value => { owner = value; throw cleanupError; };
+  try {
+    assert.throws(() => store._write(data => { data.injected = true; }), error => error === cleanupError && error.metadataPublished === true && error.metadataStage === 'lock-release' && error.metadataCleanupConfirmed === false);
+    assert.equal(JSON.parse(fs.readFileSync(store.file, 'utf8')).injected, true);
+    assert.equal(fs.existsSync(store.lockFile), true);
+  } finally { store._releaseLock = release; if (owner) release.call(store, owner); }
+});
+
+test('cleanup failure preserves the primary publication failure', t => {
+  const { store, target } = fixture(t); store.open(target);
+  const rename = fs.renameSync, release = store._releaseLock;
+  const primary = Object.assign(new Error('primary'), { code: 'EPERM' }); let owner;
+  fs.renameSync = (from, to) => { if (to === store.file) throw primary; return rename(from, to); };
+  store._releaseLock = value => { owner = value; throw Object.assign(new Error('cleanup'), { code: 'EACCES' }); };
+  try {
+    assert.throws(() => store._write(() => null), error => error === primary && error.metadataPublished === false && error.metadataCleanupConfirmed === false && error.metadataCleanupError.code === 'EACCES');
+  } finally { fs.renameSync = rename; store._releaseLock = release; if (owner) release.call(store, owner); }
+});
 function crashWithLock(root) {
   const child = spawnSync(process.execPath, ['--input-type=module', '-e',
     `import { ProjectStore } from ${JSON.stringify(storeModule)}; const store = new ProjectStore({ root: ${JSON.stringify(root)} }); store._write(() => process.exit(17));`],
