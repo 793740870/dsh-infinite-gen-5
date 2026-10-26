@@ -1,6 +1,6 @@
 # 无限五代 · IG5 v1.3.0
 
-> **当前状态（2026-10-26）**：本地版本 1.3.0；本轮未上传公开发行包。安全关键代码 37 项已完成 bai 授权的 Codex 代理复审，五项契约已逐项接受；这不表示真人亲审或独立第三方审计。版本范围及证据见 [1.3.0 说明](docs/RELEASE_1.3.0.md)，能力边界见 [能力矩阵](docs/CAPABILITIES.md) 与 [已知限制](docs/LIMITATIONS.md)。
+> **当前状态（2026-10-27）**：1.3.0 已公开发布，完整 Windows x64 自包含安装包及 SHA-256 校验文件可从 [v1.3.0 Release](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.3.0) 下载。安全关键代码 37 项已完成所有者授权的 Codex 代理复审，五项契约已逐项接受；这不表示真人亲审或独立第三方审计。版本范围及证据见 [1.3.0 说明](docs/RELEASE_1.3.0.md)，能力边界见 [能力矩阵](docs/CAPABILITIES.md) 与 [已知限制](docs/LIMITATIONS.md)。
 
 <p align="center">
   <img src="assets/banner.png" alt="无限五代 IG5 · AI 驱动的专业逆向工作台" width="100%" />
@@ -16,7 +16,7 @@
 
 默认 **Core 8** 提供日常分析入口，按需展开 **Full 43**；13 个修改或执行入口经过宿主审批。分析围绕样本身份、数据库修订和证据报告展开，不把模型推测当作已验证结论。
 
-[下载完整安装包](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.1.0) · [快速安装](#local-install) · [常用指令](#commands) · [使用文档](#documentation) · [版本更新](#updates) · [交流社区](#community)
+[下载完整安装包](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.3.0) · [快速安装](#local-install) · [常用指令](#commands) · [使用文档](#documentation) · [版本更新](#updates) · [交流社区](#community)
 
 
 
@@ -43,7 +43,7 @@
 
 需要已安装的 DeepSeek Harness profile。完整包内置 Ghidra/JDK/Python、x64dbg/Python/bridge 和上游源码、许可及哈希清单；**不需要商业 IDA 安装**，DSH 本身不随包提供。
 
-1. 从 [v1.1.0 Release](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.1.0) 下载 `IG5-1.1.0-Windows-x64-full-20261020.zip` 和同名 `.sha256`，核对 SHA-256。
+1. 从 [v1.3.0 Release](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.3.0) 下载 `IG5-1.3.0-Windows-x64-portable-full.zip` 和同名 `.sha256`，核对 SHA-256：`04273147dde23976a625c582773c33ca1df7b851da0bd5a6e52e2a7c6530b815`。
 2. 完整解压，保留 `plugin/`、`manifest.json` 及所有运行资产；不要只复制安装脚本。
 3. 在解压根目录打开 PowerShell，执行：
 
@@ -75,7 +75,7 @@
 & .\install.ps1 -DistributionArchive 'D:\IG5-1.0.0-Windows-x64-dsh021-full-20261010.zip' -Offline
 ```
 
-固定供体 ZIP 的 SHA-256：`a2459ddca1f19e5eec2d7918c504f133889809800a0b277e1e379d3ce1459b54`。这是 **1.0.0 供体**的校验值，不是 1.1.0 完整 ZIP 的校验值。
+固定供体 ZIP 的 SHA-256：`a2459ddca1f19e5eec2d7918c504f133889809800a0b277e1e379d3ce1459b54`。这是 **1.0.0 供体**的校验值，不是 1.3.0 完整 ZIP 的校验值。
 
 也可使用已核验、包含 `manifest.json` 和 `plugin/` 的完整解压根目录：
 
@@ -216,6 +216,17 @@ dsh-infinite-gen-5/
 <a id="updates"></a>
 
 ## 版本更新
+
+### v1.3.0 · 2026-10-27
+
+1.3.0 将工具面由 Full 40 扩展至 Full 43，同时保持 Core 8、13 个审批门、既有预算和能力限制不变。
+
+- **工具与调查入口**：新增 `ig5_package`，并从 `ig5_profile` 拆出 `ig5_workspace` 与 `ig5_recovery`；增加持久函数结果、认证游标分页、最多 72 个函数的持久批处理和大型反编译结果完整重组。
+- **静态分析**：增加 APK、固件、规则匹配、加壳特征、行为清单以及字符串与配置解码能力。
+- **动态与网络分析**：增加 x64dbg API trace、CPU 写入/代码版本轨迹，以及已保存 HTTP 交换与本地样本的离线对应。
+- **VM 与去混淆研究**：增加代码 epoch、阶段上下文、VM 角色/实例、CFF 状态分析、位向量候选和独立验证回执；这些能力仍受证据边界约束，不等于通用恢复任意 VMP 或业务逻辑。
+
+完整变更、审查口径与能力边界见 [v1.3.0 Release](https://github.com/Minglink/dsh-infinite-gen-5/releases/tag/v1.3.0) 和 [1.3.0 说明](docs/RELEASE_1.3.0.md)。历史版本继续保留在[全部 Releases](https://github.com/Minglink/dsh-infinite-gen-5/releases)。
 
 ### v1.1.0 · 2026-10-20
 
